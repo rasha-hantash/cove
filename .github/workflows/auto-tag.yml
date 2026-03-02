@@ -11,6 +11,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: Read version from Cargo.toml
         id: version
