@@ -17,6 +17,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::cli::HookEvent;
+use crate::naming;
+use crate::tmux;
 
 // ── Types ──
 
@@ -115,7 +117,26 @@ pub fn run(event: HookEvent) -> Result<(), String> {
     // This lets the sidebar distinguish sessions even when they share a cwd.
     let pane_id = std::env::var("TMUX_PANE").unwrap_or_default();
 
-    write_event(&hook.session_id, &hook.cwd, &pane_id, state)
+    write_event(&hook.session_id, &hook.cwd, &pane_id, state)?;
+
+    // Auto-update window name if the branch changed (e.g. Claude switched branches
+    // or created a worktree). Silently ignore errors — hooks must never block Claude.
+    let _ = maybe_rename_window(&hook.cwd, &pane_id);
+
+    Ok(())
+}
+
+/// Recompute the window name from the stored base + current git branch.
+/// Renames the window if the name has drifted.
+fn maybe_rename_window(cwd: &str, pane_id: &str) -> Result<(), String> {
+    let base = tmux::get_window_option(pane_id, "@cove_base")?;
+    let expected = naming::build_window_name(&base, cwd);
+    let current = tmux::get_window_name(pane_id)?;
+
+    if current != expected {
+        tmux::rename_window(pane_id, &expected)?;
+    }
+    Ok(())
 }
 
 // ── Tests ──

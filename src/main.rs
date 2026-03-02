@@ -1,6 +1,7 @@
 mod cli;
 mod colors;
 mod commands;
+mod naming;
 mod sidebar;
 mod tmux;
 
@@ -21,12 +22,21 @@ fn main() {
         None => {
             // Default behavior: start a session or resume
             match cli.name {
-                Some(name) => commands::start::run(&name, cli.dir.as_deref()),
+                Some(name) => {
+                    let dir = cli.dir.as_deref().unwrap_or(".");
+                    let full = naming::build_window_name(&name, dir);
+                    commands::start::run(&full, &name, Some(dir))
+                }
                 None => {
                     if tmux::has_session() {
                         commands::resume::run()
                     } else {
-                        commands::start::run("session", Some("."))
+                        let base = std::env::current_dir()
+                            .ok()
+                            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                            .unwrap_or_else(|| "session".to_string());
+                        let full = naming::build_window_name(&base, ".");
+                        commands::start::run(&full, &base, Some("."))
                     }
                 }
             }

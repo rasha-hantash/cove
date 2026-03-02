@@ -135,14 +135,10 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), Strin
 }
 
 pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
-    // Explicitly pick the next unused index to avoid "index N in use" errors
-    // caused by zombie windows kept alive by remain-on-exit.
-    let max_idx = list_windows()?.iter().map(|w| w.index).max().unwrap_or(0);
-    let next_idx = (max_idx + 1).to_string();
-
-    let target = format!("{SESSION}:{next_idx}");
+    // Let tmux auto-assign the next available index to avoid "index N in use"
+    // collisions with zombie windows kept alive by remain-on-exit.
     let status = Command::new("tmux")
-        .args(["new-window", "-t", &target, "-n", name, "-c", dir, "claude"])
+        .args(["new-window", "-t", SESSION, "-n", name, "-c", dir, "claude"])
         .status()
         .map_err(|e| format!("tmux: {e}"))?;
 
@@ -309,6 +305,27 @@ pub fn get_claude_pane_id(window_name: &str) -> Result<String, String> {
     let target = format!("{SESSION}:{window_name}.1");
     let out = tmux_stdout(&["display-message", "-t", &target, "-p", "#{pane_id}"])?;
     Ok(out.trim().to_string())
+}
+
+pub fn set_window_option(window_name: &str, key: &str, value: &str) -> Result<(), String> {
+    let target = format!("{SESSION}:{window_name}");
+    tmux_stdout(&["set-option", "-w", "-t", &target, key, value])?;
+    Ok(())
+}
+
+pub fn get_window_option(pane_id: &str, key: &str) -> Result<String, String> {
+    let out = tmux_stdout(&["show-option", "-w", "-t", pane_id, "-v", key])?;
+    Ok(out.trim().to_string())
+}
+
+pub fn get_window_name(pane_id: &str) -> Result<String, String> {
+    let out = tmux_stdout(&["display-message", "-t", pane_id, "-p", "#{window_name}"])?;
+    Ok(out.trim().to_string())
+}
+
+pub fn rename_window(pane_id: &str, new_name: &str) -> Result<(), String> {
+    tmux_stdout(&["rename-window", "-t", pane_id, new_name])?;
+    Ok(())
 }
 
 pub fn select_window_sidebar(index: u32) -> Result<(), String> {
