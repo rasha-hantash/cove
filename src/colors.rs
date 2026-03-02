@@ -4,6 +4,7 @@ use ratatui::style::Color;
 
 pub const LAVENDER: Color = Color::Rgb(180, 190, 254);
 pub const BLUE: Color = Color::Rgb(137, 180, 250);
+pub const PEACH: Color = Color::Rgb(250, 179, 135);
 pub const OVERLAY: Color = Color::Rgb(108, 112, 134);
 pub const GREEN: Color = Color::Rgb(166, 227, 161);
 pub const SURFACE: Color = Color::Rgb(69, 71, 90);

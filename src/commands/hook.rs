@@ -4,10 +4,11 @@
 // Reads JSON from stdin, determines state, appends to ~/.cove/events/{session_id}.jsonl.
 //
 // Hook → state mapping:
-//   UserPromptSubmit           → working
-//   PreToolUse(AskUserQuestion)  → asking
-//   PostToolUse(AskUserQuestion) → working
-//   Stop                       → idle
+//   UserPromptSubmit                       → working
+//   PreToolUse (asking tools)              → asking
+//   PreToolUse (other tools)               → waiting
+//   PostToolUse                            → working
+//   Stop                                   → idle
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -23,6 +24,9 @@ use crate::cli::HookEvent;
 struct HookInput {
     session_id: String,
     cwd: String,
+    /// Tool name from PreToolUse/PostToolUse payloads (e.g. "Bash", "AskUserQuestion").
+    #[serde(default)]
+    tool_name: String,
 }
 
 // ── Helpers ──
@@ -72,6 +76,11 @@ fn has_working_event_in(session_id: &str, dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+// ── Constants ──
+
+/// Tools that represent Claude asking the user a question (not a permission prompt).
+const ASKING_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"];
+
 // ── Public API ──
 
 pub fn run(event: HookEvent) -> Result<(), String> {
@@ -84,9 +93,16 @@ pub fn run(event: HookEvent) -> Result<(), String> {
         serde_json::from_str(&input).map_err(|e| format!("parse hook input: {e}"))?;
 
     let state = match event {
-        HookEvent::UserPrompt | HookEvent::AskDone => "working",
+        HookEvent::UserPrompt | HookEvent::AskDone | HookEvent::PostTool => "working",
         HookEvent::Stop => "idle",
         HookEvent::Ask => "asking",
+        HookEvent::PreTool => {
+            if ASKING_TOOLS.contains(&hook.tool_name.as_str()) {
+                "asking"
+            } else {
+                "waiting"
+            }
+        }
     };
 
     // Suppress the initial "idle" on session startup — only write it after

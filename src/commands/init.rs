@@ -32,11 +32,11 @@ pub fn hooks_installed(path: &Path) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    // Must have the ask hook AND ExitPlanMode (detects old installs missing newer hooks)
+    // Must have the wildcard pre-tool hook (detects old installs with specific matchers)
     // AND point to the current binary (detects stale paths after rename/move)
     let bin = cove_bin_path();
-    let ask_cmd = format!("{bin} hook ask");
-    content.contains(&ask_cmd) && content.contains("ExitPlanMode")
+    let pre_tool_cmd = format!("{bin} hook pre-tool");
+    content.contains(&pre_tool_cmd)
 }
 
 /// Install Cove hooks into settings.json.
@@ -121,12 +121,8 @@ fn install_hooks_with_bin(path: &Path, bin: &str) -> Result<(), String> {
     let entries: &[(&str, &str, &str)] = &[
         ("UserPromptSubmit", "*", "hook user-prompt"),
         ("Stop", "*", "hook stop"),
-        ("PreToolUse", "AskUserQuestion", "hook ask"),
-        ("PostToolUse", "AskUserQuestion", "hook ask-done"),
-        ("PreToolUse", "ExitPlanMode", "hook ask"),
-        ("PostToolUse", "ExitPlanMode", "hook ask-done"),
-        ("PreToolUse", "EnterPlanMode", "hook ask"),
-        ("PostToolUse", "EnterPlanMode", "hook ask-done"),
+        ("PreToolUse", "*", "hook pre-tool"),
+        ("PostToolUse", "*", "hook post-tool"),
     ];
 
     // Remove stale cove hooks once per hook_type before adding new ones.
@@ -188,14 +184,10 @@ pub fn run() -> Result<(), String> {
     } else {
         println!("Installed Cove hooks in ~/.claude/settings.json");
     }
-    println!("  UserPromptSubmit              → cove hook user-prompt");
-    println!("  Stop                          → cove hook stop");
-    println!("  PreToolUse(AskUserQuestion)   → cove hook ask");
-    println!("  PostToolUse(AskUserQuestion)  → cove hook ask-done");
-    println!("  PreToolUse(ExitPlanMode)      → cove hook ask");
-    println!("  PostToolUse(ExitPlanMode)     → cove hook ask-done");
-    println!("  PreToolUse(EnterPlanMode)     → cove hook ask");
-    println!("  PostToolUse(EnterPlanMode)    → cove hook ask-done");
+    println!("  UserPromptSubmit  → cove hook user-prompt");
+    println!("  Stop              → cove hook stop");
+    println!("  PreToolUse(*)     → cove hook pre-tool");
+    println!("  PostToolUse(*)    → cove hook post-tool");
 
     Ok(())
 }
@@ -224,7 +216,7 @@ mod tests {
     fn test_hooks_installed_only_old_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        // Old installation — has "cove hook stop" but not "cove hook ask"
+        // Old installation — has "cove hook stop" but not "cove hook pre-tool"
         fs::write(
             &path,
             r#"{"hooks":{"Stop":[{"hooks":[{"command":"cove hook stop"}]}]}}"#,
@@ -256,21 +248,21 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("cove hook user-prompt"));
         assert!(content.contains("cove hook stop"));
-        assert!(content.contains("cove hook ask\""));
-        assert!(content.contains("cove hook ask-done"));
+        assert!(content.contains("cove hook pre-tool"));
+        assert!(content.contains("cove hook post-tool"));
 
         let parsed: Value = serde_json::from_str(&content).unwrap();
         let hooks = parsed["hooks"].as_object().unwrap();
         assert_eq!(hooks["UserPromptSubmit"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
-        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 3);
-        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 3);
+        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 1);
 
-        // PreToolUse should have AskUserQuestion, ExitPlanMode, EnterPlanMode matchers
+        // PreToolUse and PostToolUse should use wildcard matchers
         let pre = hooks["PreToolUse"].as_array().unwrap();
-        assert_eq!(pre[0]["matcher"].as_str().unwrap(), "AskUserQuestion");
-        assert_eq!(pre[1]["matcher"].as_str().unwrap(), "ExitPlanMode");
-        assert_eq!(pre[2]["matcher"].as_str().unwrap(), "EnterPlanMode");
+        assert_eq!(pre[0]["matcher"].as_str().unwrap(), "*");
+        let post = hooks["PostToolUse"].as_array().unwrap();
+        assert_eq!(post[0]["matcher"].as_str().unwrap(), "*");
     }
 
     #[test]
@@ -321,8 +313,8 @@ mod tests {
         // Each hook type should still have the correct number of Cove entries
         assert_eq!(hooks["UserPromptSubmit"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
-        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 3);
-        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 3);
+        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -334,7 +326,7 @@ mod tests {
 
         assert!(path.exists());
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("cove hook ask"));
+        assert!(content.contains("cove hook pre-tool"));
     }
 
     #[test]
@@ -357,9 +349,9 @@ mod tests {
         // Old hooks should not be duplicated
         assert_eq!(hooks["UserPromptSubmit"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
-        // New hooks should be added (3 each: AskUserQuestion + ExitPlanMode + EnterPlanMode)
-        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 3);
-        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 3);
+        // New wildcard hooks should be added (1 each)
+        assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 1);
     }
 
     #[test]

@@ -25,6 +25,8 @@ pub enum WindowState {
     Working,
     /// Claude is waiting for user to answer a question.
     Asking,
+    /// Claude is waiting for the user to approve a tool use.
+    Waiting,
     /// Claude finished answering — waiting for next user message.
     Idle,
     /// Claude process exited — shell prompt visible.
@@ -126,6 +128,7 @@ fn state_from_str(s: &str) -> WindowState {
     match s {
         "working" => WindowState::Working,
         "asking" => WindowState::Asking,
+        "waiting" => WindowState::Waiting,
         "idle" => WindowState::Idle,
         _ => WindowState::Fresh,
     }
@@ -363,6 +366,7 @@ mod tests {
         assert_eq!(state_from_str("working"), WindowState::Working);
         assert_eq!(state_from_str("idle"), WindowState::Idle);
         assert_eq!(state_from_str("asking"), WindowState::Asking);
+        assert_eq!(state_from_str("waiting"), WindowState::Waiting);
         assert_eq!(state_from_str("unknown"), WindowState::Fresh);
     }
 

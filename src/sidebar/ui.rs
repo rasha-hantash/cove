@@ -156,6 +156,7 @@ fn status_text(state: WindowState) -> &'static str {
     match state {
         WindowState::Working => "",
         WindowState::Asking => "waiting\u{2026}",
+        WindowState::Waiting => "approve\u{2026}",
         WindowState::Idle => "your turn",
         WindowState::Done => "",
         WindowState::Fresh => "",
@@ -169,6 +170,12 @@ fn status_span(state: WindowState, tick: u64) -> Span<'static> {
             Span::styled(format!(" {frame}"), Style::default().fg(colors::LAVENDER))
         }
         WindowState::Idle => Span::styled(status_text(state), Style::default().fg(colors::GREEN)),
+        WindowState::Waiting => Span::styled(
+            status_text(state),
+            Style::default()
+                .fg(colors::PEACH)
+                .add_modifier(Modifier::ITALIC),
+        ),
         _ => Span::styled(
             status_text(state),
             Style::default()
