@@ -37,6 +37,16 @@ Claude Code hooks → `cove hook {event}` → writes JSONL to `~/.cove/events/{s
 - **`sidebar/ui.rs`** — ratatui widgets. Session list with status indicators (animated spinner for Working, static labels for other states).
 - **`colors.rs`** — Catppuccin Mocha palette. Defines both ratatui `Color` constants and `ANSI_*` escape codes for CLI output.
 
+## Pre-coding context gate
+
+Before writing any Rust code for a new module or significant piece of work, **stop and ask the user for context first**. The prompt should be:
+
+> Before I write code for this, please give me the relevant Rust context for: **[describe the specific piece of work]**
+
+The user will query their technical-rag system (which has ingested Rust books) and provide best-practice guidance, patterns, and idioms relevant to that specific task. Wait for their response before writing any code.
+
+This applies to new modules, non-trivial refactors, and any area where Rust-specific patterns matter (error handling, trait design, async, lifetimes, etc.). It does NOT apply to small mechanical changes like adding a clap variant or wiring a new subcommand.
+
 ### Key Design Decisions
 
 - **Pane ID matching**: Events are matched to windows via `$TMUX_PANE` (unique per pane), not by `cwd`. This handles multiple sessions in the same directory.
