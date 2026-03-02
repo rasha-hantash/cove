@@ -139,7 +139,17 @@ pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
     // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
     // and tmux tries to create at that exact index, causing "index N in use".
     let status = Command::new("tmux")
-        .args(["new-window", "-a", "-t", SESSION, "-n", name, "-c", dir, "claude"])
+        .args([
+            "new-window",
+            "-a",
+            "-t",
+            SESSION,
+            "-n",
+            name,
+            "-c",
+            dir,
+            "claude",
+        ])
         .status()
         .map_err(|e| format!("tmux: {e}"))?;
 
