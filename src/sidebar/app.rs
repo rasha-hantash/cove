@@ -9,6 +9,7 @@ use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use crate::sidebar::context::ContextManager;
 use crate::sidebar::event::{self, Action};
 use crate::sidebar::state::{StateDetector, WindowState};
 use crate::sidebar::ui::SidebarWidget;
@@ -22,6 +23,8 @@ struct SidebarApp {
     selected: usize,
     tick: u64,
     detector: StateDetector,
+    context_mgr: ContextManager,
+    prev_selected_name: Option<String>,
 }
 
 // ── Constants ──
@@ -57,6 +60,8 @@ fn run_loop() -> Result<(), String> {
         selected: 0,
         tick: 0,
         detector: StateDetector::new(),
+        context_mgr: ContextManager::new(),
+        prev_selected_name: None,
     };
 
     loop {
@@ -68,6 +73,35 @@ fn run_loop() -> Result<(), String> {
         // Detect states every tick
         app.states = app.detector.detect(&app.windows);
 
+        // Drain completed context results from background threads
+        app.context_mgr.drain();
+
+        // Track selection changes and manage context generation
+        let current_name = app.windows.get(app.selected).map(|w| w.name.clone());
+        if current_name != app.prev_selected_name {
+            // Refresh context for old session (we're switching away from it)
+            if let Some(ref prev_name) = app.prev_selected_name {
+                if let Some(prev_win) = app.windows.iter().find(|w| w.name == *prev_name) {
+                    app.context_mgr.refresh(&prev_win.name, &prev_win.pane_path);
+                }
+            }
+            // Request context for new session (no-op if already cached)
+            if let Some(win) = app.windows.get(app.selected) {
+                app.context_mgr.request(&win.name, &win.pane_path);
+            }
+            app.prev_selected_name = current_name;
+        }
+
+        // Prepare context for rendering
+        let context = app
+            .windows
+            .get(app.selected)
+            .and_then(|win| app.context_mgr.get(&win.name));
+        let context_loading = app
+            .windows
+            .get(app.selected)
+            .is_some_and(|win| app.context_mgr.is_loading(&win.name));
+
         // Render
         terminal
             .draw(|frame| {
@@ -77,6 +111,8 @@ fn run_loop() -> Result<(), String> {
                     states: &app.states,
                     selected: app.selected,
                     tick: app.tick,
+                    context,
+                    context_loading,
                 };
                 frame.render_widget(widget, area);
             })
