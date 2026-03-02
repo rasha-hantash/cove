@@ -135,10 +135,11 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), Strin
 }
 
 pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
-    // Let tmux auto-assign the next available index to avoid "index N in use"
-    // collisions with zombie windows kept alive by remain-on-exit.
+    // -a = insert AFTER the target window, not AT its index.
+    // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
+    // and tmux tries to create at that exact index, causing "index N in use".
     let status = Command::new("tmux")
-        .args(["new-window", "-t", SESSION, "-n", name, "-c", dir, "claude"])
+        .args(["new-window", "-a", "-t", SESSION, "-n", name, "-c", dir, "claude"])
         .status()
         .map_err(|e| format!("tmux: {e}"))?;
 
