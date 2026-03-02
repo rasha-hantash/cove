@@ -85,10 +85,23 @@ impl Widget for SidebarWidget<'_> {
         let body_start = area.y + 2;
         let right_col = area.width.saturating_sub(15);
 
-        // Left column: sessions with context for selected
-        let mut y = body_start;
+        // Pre-calculate context block height so we can reserve space at the bottom
+        let context_height = if let Some(context) = self.context {
+            let max_width = (area.width as usize).saturating_sub(3);
+            let text_lines = wrap_text(context, max_width, 3).len() as u16;
+            1 + text_lines // dashed separator + text lines
+        } else if self.context_loading {
+            2 // dashed separator + "loading…"
+        } else {
+            0
+        };
+
+        // Left column: sessions
+        let body_bottom = area.y + area.height;
+        let session_bottom = body_bottom.saturating_sub(context_height);
         for (i, win) in self.windows.iter().enumerate() {
-            if y >= area.y + area.height {
+            let y = body_start + i as u16;
+            if y >= session_bottom {
                 break;
             }
 
@@ -130,16 +143,6 @@ impl Widget for SidebarWidget<'_> {
 
             let line = Line::from(spans);
             buf.set_line(area.x, y, &line, right_col);
-            y += 1;
-
-            // Context for selected session
-            if is_selected {
-                if let Some(context) = self.context {
-                    y = render_context_block(buf, area, y, right_col, context);
-                } else if self.context_loading {
-                    y = render_loading_block(buf, area, y, right_col);
-                }
-            }
         }
 
         // Right column: legend (independent positioning)
@@ -154,6 +157,18 @@ impl Widget for SidebarWidget<'_> {
                 Span::styled(entry.label, Style::default().fg(colors::OVERLAY)),
             ]);
             buf.set_line(area.x + right_col, ly, &legend_line, area.width - right_col);
+        }
+
+        // Context block pinned to the bottom of the panel
+        if context_height > 0 {
+            let context_start = body_bottom.saturating_sub(context_height);
+            if context_start >= body_start {
+                if let Some(context) = self.context {
+                    render_context_block(buf, area, context_start, right_col, context);
+                } else if self.context_loading {
+                    render_loading_block(buf, area, context_start);
+                }
+            }
         }
     }
 }
@@ -196,49 +211,39 @@ fn status_span(state: WindowState, tick: u64) -> Span<'static> {
 }
 
 /// Render the dashed separator + context text below the selected session.
-/// Returns the next y position.
-fn render_context_block(
-    buf: &mut Buffer,
-    area: Rect,
-    mut y: u16,
-    right_col: u16,
-    text: &str,
-) -> u16 {
-    // Dashed separator
+fn render_context_block(buf: &mut Buffer, area: Rect, mut y: u16, _right_col: u16, text: &str) {
+    // Dashed separator (full width with 1-char padding on each side)
     if y < area.y + area.height {
-        for x in (area.x + 3)..area.x + right_col {
+        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
             buf.cell_mut((x, y))
-                .map(|cell| cell.set_char('\u{2508}').set_fg(colors::SURFACE));
+                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
         }
         y += 1;
     }
 
     // Word-wrapped context (max 3 lines)
-    let max_width = (right_col as usize).saturating_sub(4);
+    let max_width = (area.width as usize).saturating_sub(3);
     let lines = wrap_text(text, max_width, 3);
     for line_text in &lines {
         if y >= area.y + area.height {
             break;
         }
         let line = Line::from(vec![
-            Span::raw("   "),
+            Span::raw(" "),
             Span::styled(line_text.clone(), Style::default().fg(colors::OVERLAY)),
         ]);
-        buf.set_line(area.x, y, &line, right_col);
+        buf.set_line(area.x, y, &line, area.width);
         y += 1;
     }
-
-    y
 }
 
-/// Render the dashed separator + "loading..." indicator.
-/// Returns the next y position.
-fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16, right_col: u16) -> u16 {
-    // Dashed separator
+/// Render the dashed separator + "loading…" indicator.
+fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16) {
+    // Dashed separator (full width with 1-char padding on each side)
     if y < area.y + area.height {
-        for x in (area.x + 3)..area.x + right_col {
+        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
             buf.cell_mut((x, y))
-                .map(|cell| cell.set_char('\u{2508}').set_fg(colors::SURFACE));
+                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
         }
         y += 1;
     }
@@ -246,7 +251,7 @@ fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16, right_col: u16
     // Loading indicator
     if y < area.y + area.height {
         let line = Line::from(vec![
-            Span::raw("   "),
+            Span::raw(" "),
             Span::styled(
                 "loading\u{2026}",
                 Style::default()
@@ -254,11 +259,8 @@ fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16, right_col: u16
                     .add_modifier(Modifier::ITALIC),
             ),
         ]);
-        buf.set_line(area.x, y, &line, right_col);
-        y += 1;
+        buf.set_line(area.x, y, &line, area.width);
     }
-
-    y
 }
 
 /// Word-wrap text to fit within `max_width`, returning at most `max_lines` lines.
@@ -271,9 +273,11 @@ fn wrap_text(text: &str, max_width: usize, max_lines: usize) -> Vec<String> {
     let mut current = String::new();
 
     for word in text.split_whitespace() {
+        let word_width = word.chars().count();
         if current.is_empty() {
-            if word.len() > max_width {
-                current = format!("{}\u{2026}", &word[..max_width.saturating_sub(1)]);
+            if word_width > max_width {
+                let truncated: String = word.chars().take(max_width.saturating_sub(1)).collect();
+                current = format!("{truncated}\u{2026}");
                 lines.push(current);
                 current = String::new();
                 if lines.len() >= max_lines {
@@ -282,7 +286,7 @@ fn wrap_text(text: &str, max_width: usize, max_lines: usize) -> Vec<String> {
                 continue;
             }
             current = word.to_string();
-        } else if current.len() + 1 + word.len() <= max_width {
+        } else if current.chars().count() + 1 + word_width <= max_width {
             current.push(' ');
             current.push_str(word);
         } else {

@@ -73,6 +73,19 @@ fn run_loop() -> Result<(), String> {
         // Detect states every tick
         app.states = app.detector.detect(&app.windows);
 
+        // Prefetch context for all non-fresh sessions
+        for win in &app.windows {
+            let state = app
+                .states
+                .get(&win.index)
+                .copied()
+                .unwrap_or(WindowState::Fresh);
+            if state != WindowState::Fresh {
+                let pane_id = app.detector.pane_id(win.index).unwrap_or("");
+                app.context_mgr.request(&win.name, &win.pane_path, pane_id);
+            }
+        }
+
         // Drain completed context results from background threads
         app.context_mgr.drain();
 
@@ -82,12 +95,15 @@ fn run_loop() -> Result<(), String> {
             // Refresh context for old session (we're switching away from it)
             if let Some(ref prev_name) = app.prev_selected_name {
                 if let Some(prev_win) = app.windows.iter().find(|w| w.name == *prev_name) {
-                    app.context_mgr.refresh(&prev_win.name, &prev_win.pane_path);
+                    let pane_id = app.detector.pane_id(prev_win.index).unwrap_or("");
+                    app.context_mgr
+                        .refresh(&prev_win.name, &prev_win.pane_path, pane_id);
                 }
             }
             // Request context for new session (no-op if already cached)
             if let Some(win) = app.windows.get(app.selected) {
-                app.context_mgr.request(&win.name, &win.pane_path);
+                let pane_id = app.detector.pane_id(win.index).unwrap_or("");
+                app.context_mgr.request(&win.name, &win.pane_path, pane_id);
             }
             app.prev_selected_name = current_name;
         }

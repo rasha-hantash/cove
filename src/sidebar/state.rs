@@ -161,11 +161,20 @@ pub fn purge_events_for_pane(pane_id: &str) {
     }
 }
 
-pub struct StateDetector;
+pub struct StateDetector {
+    pane_ids: HashMap<u32, String>,
+}
 
 impl StateDetector {
     pub fn new() -> Self {
-        Self
+        Self {
+            pane_ids: HashMap::new(),
+        }
+    }
+
+    /// Get the tmux pane_id (e.g. "%5") for a window's Claude pane.
+    pub fn pane_id(&self, window_index: u32) -> Option<&str> {
+        self.pane_ids.get(&window_index).map(String::as_str)
     }
 
     /// Detect the state of each window. Returns a map from window_index to state.
@@ -174,6 +183,13 @@ impl StateDetector {
 
         // Get foreground commands + pane IDs for all panes in one tmux call
         let pane_infos: Vec<tmux::PaneInfo> = tmux::list_pane_commands().unwrap_or_default();
+
+        // Store pane_ids so context manager can look them up
+        self.pane_ids = pane_infos
+            .iter()
+            .map(|p| (p.window_index, p.pane_id.clone()))
+            .collect();
+
         let pane_cmds: HashMap<u32, &str> = pane_infos
             .iter()
             .map(|p| (p.window_index, p.command.as_str()))
