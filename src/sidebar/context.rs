@@ -26,8 +26,9 @@ pub struct ContextManager {
 // ── Constants ──
 
 const SUMMARY_PROMPT: &str = "\
-Summarize what was being worked on in this conversation in 1-2 concise sentences. \
-Be specific about the feature, bug, or task. Output only the summary, nothing else.";
+Summarize the overall goal and current state of this conversation in 1-2 sentences. \
+What is the user trying to accomplish, and where are things at? \
+Output only the summary, nothing else.";
 
 /// Max chars of conversation text to include in the prompt.
 const CONVERSATION_BUDGET: usize = 6000;
@@ -250,10 +251,13 @@ fn generate_context(cwd: &str, pane_id: &str) -> Option<String> {
 
     let prompt = format!("{SUMMARY_PROMPT}\n\nConversation:\n{conversation}");
 
-    // Fresh claude -p call — no -c, no session resume, no large context reload
+    // Fresh claude -p call — no -c, no session resume, no large context reload.
+    // Must clear CLAUDECODE env var to avoid "nested session" detection,
+    // since the sidebar itself runs inside a Claude Code session.
     let mut child = Command::new("claude")
         .args(["-p", &prompt, "--max-turns", "1", "--model", "haiku"])
         .current_dir(cwd)
+        .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
