@@ -45,6 +45,8 @@ The release pipeline is fully automated **once the version is bumped**. The chai
 
 Patch bumps (0.3.3 → 0.3.4) for fixes, minor bumps (0.3 → 0.4) for new features.
 
+**Always commit `Cargo.lock` with version bumps.** The publish workflow runs `cargo publish` which fails if `Cargo.lock` is stale. After bumping the version in `Cargo.toml`, run `cargo build` (or `cargo generate-lockfile`) and include the updated `Cargo.lock` in the same commit.
+
 ## Pre-coding context gate
 
 Before writing any Rust code for a new module or significant piece of work, **stop and ask the user for context first**. The prompt should be:
