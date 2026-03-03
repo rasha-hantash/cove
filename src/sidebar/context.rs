@@ -50,6 +50,12 @@ const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 
 // ── Public API ──
 
+impl Default for ContextManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContextManager {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel();

@@ -1,13 +1,6 @@
-mod cli;
-mod colors;
-mod commands;
-mod events;
-mod naming;
-mod sidebar;
-mod tmux;
-
 use clap::Parser;
-use cli::{Cli, Command};
+use cove_cli::cli::{Cli, Command};
+use cove_cli::{commands, naming, sidebar, tmux};
 
 fn main() {
     let cli = Cli::parse();

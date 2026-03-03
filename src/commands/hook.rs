@@ -52,9 +52,26 @@ fn has_working_event_in(session_id: &str, dir: &Path) -> bool {
 // ── Constants ──
 
 /// Tools that represent Claude asking the user a question (not a permission prompt).
-const ASKING_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"];
+pub const ASKING_TOOLS: &[&str] = &["AskUserQuestion", "ExitPlanMode", "EnterPlanMode"];
 
 // ── Public API ──
+
+/// Map a hook event + tool name to the state string that gets written to the event file.
+pub fn determine_state(event: &HookEvent, tool_name: &str) -> &'static str {
+    match event {
+        HookEvent::UserPrompt | HookEvent::AskDone | HookEvent::PostTool => "working",
+        HookEvent::Stop => "idle",
+        HookEvent::SessionEnd => "end",
+        HookEvent::Ask => "asking",
+        HookEvent::PreTool => {
+            if ASKING_TOOLS.contains(&tool_name) {
+                "asking"
+            } else {
+                "waiting"
+            }
+        }
+    }
+}
 
 pub fn run(event: HookEvent) -> Result<(), String> {
     let mut input = String::new();
@@ -65,19 +82,7 @@ pub fn run(event: HookEvent) -> Result<(), String> {
     let hook: HookInput =
         serde_json::from_str(&input).map_err(|e| format!("parse hook input: {e}"))?;
 
-    let state = match event {
-        HookEvent::UserPrompt | HookEvent::AskDone | HookEvent::PostTool => "working",
-        HookEvent::Stop => "idle",
-        HookEvent::SessionEnd => "end",
-        HookEvent::Ask => "asking",
-        HookEvent::PreTool => {
-            if ASKING_TOOLS.contains(&hook.tool_name.as_str()) {
-                "asking"
-            } else {
-                "waiting"
-            }
-        }
-    };
+    let state = determine_state(&event, &hook.tool_name);
 
     // Suppress the initial "idle" on session startup — only write it after
     // the user has submitted at least one prompt (i.e. a "working" event exists).

@@ -5,7 +5,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Path to the Cove events directory (~/.cove/events/).
 pub fn events_dir() -> PathBuf {
@@ -15,8 +15,18 @@ pub fn events_dir() -> PathBuf {
 
 /// Append a state event to the session's event file.
 pub fn write_event(session_id: &str, cwd: &str, pane_id: &str, state: &str) -> Result<(), String> {
-    let dir = events_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("create events dir: {e}"))?;
+    write_event_to(&events_dir(), session_id, cwd, pane_id, state)
+}
+
+/// Append a state event to a session file in the given directory.
+pub fn write_event_to(
+    dir: &Path,
+    session_id: &str,
+    cwd: &str,
+    pane_id: &str,
+    state: &str,
+) -> Result<(), String> {
+    fs::create_dir_all(dir).map_err(|e| format!("create events dir: {e}"))?;
 
     let path = dir.join(format!("{session_id}.jsonl"));
     let mut file = OpenOptions::new()
@@ -40,8 +50,12 @@ pub fn write_event(session_id: &str, cwd: &str, pane_id: &str, state: &str) -> R
 /// Returns the session_id from the file whose last event matches the pane_id
 /// with the highest timestamp (handles pane_id recycling).
 pub fn find_session_id(pane_id: &str) -> Option<String> {
-    let dir = events_dir();
-    let entries = fs::read_dir(&dir).ok()?;
+    find_session_id_in(&events_dir(), pane_id)
+}
+
+/// Find the Claude session_id for a given pane_id by scanning event files in the given directory.
+pub fn find_session_id_in(dir: &Path, pane_id: &str) -> Option<String> {
+    let entries = fs::read_dir(dir).ok()?;
 
     let mut best: Option<(String, u64)> = None;
     for entry in entries.flatten() {

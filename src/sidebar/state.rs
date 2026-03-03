@@ -49,7 +49,7 @@ struct EventEntry {
 
 /// Read the last line of a file efficiently.
 /// Returns None if the file is empty or unreadable.
-fn read_last_line(path: &Path) -> Option<String> {
+pub fn read_last_line(path: &Path) -> Option<String> {
     let file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     if len == 0 {
@@ -90,7 +90,7 @@ fn read_last_line(path: &Path) -> Option<String> {
 /// Returns a map of pane_id → state, keeping only the highest-timestamp entry
 /// per pane_id. This deduplicates across multiple files that share a recycled
 /// pane ID, ensuring the current session's events always win.
-fn load_latest_events(dir: &Path) -> HashMap<String, String> {
+pub fn load_latest_events(dir: &Path) -> HashMap<String, String> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return HashMap::new(),
@@ -120,7 +120,7 @@ fn load_latest_events(dir: &Path) -> HashMap<String, String> {
     best.into_iter().map(|(k, (state, _))| (k, state)).collect()
 }
 
-fn state_from_str(s: &str) -> WindowState {
+pub fn state_from_str(s: &str) -> WindowState {
     match s {
         "working" => WindowState::Working,
         "asking" => WindowState::Asking,
@@ -136,8 +136,12 @@ fn state_from_str(s: &str) -> WindowState {
 /// Called when a new window is created to prevent stale events (from a previous
 /// session that used the same recycled tmux pane_id) from contaminating state.
 pub fn purge_events_for_pane(pane_id: &str) {
-    let dir = events::events_dir();
-    let entries = match fs::read_dir(&dir) {
+    purge_events_for_pane_in(&events::events_dir(), pane_id);
+}
+
+/// Remove event files whose last event matches the given pane_id from the given directory.
+pub fn purge_events_for_pane_in(dir: &Path, pane_id: &str) {
+    let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
@@ -159,6 +163,12 @@ pub fn purge_events_for_pane(pane_id: &str) {
 
 pub struct StateDetector {
     pane_ids: HashMap<u32, String>,
+}
+
+impl Default for StateDetector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StateDetector {
@@ -410,22 +420,7 @@ mod tests {
         )
         .unwrap();
 
-        // Call purge with a custom dir (can't use purge_events_for_pane directly
-        // since it uses events::events_dir(), so test the logic inline)
-        let entries = fs::read_dir(dir.path()).unwrap();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            if let Some(line) = read_last_line(&path) {
-                if let Ok(event) = serde_json::from_str::<EventEntry>(&line) {
-                    if event.pane_id == "%3" {
-                        fs::remove_file(&path).unwrap();
-                    }
-                }
-            }
-        }
+        purge_events_for_pane_in(dir.path(), "%3");
 
         // Only the %0 file should remain
         let remaining: Vec<_> = fs::read_dir(dir.path())

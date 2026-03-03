@@ -11,6 +11,10 @@ keywords = ["tmux", "claude", "cove", "terminal", "tui"]
 categories = ["command-line-utilities"]
 rust-version = "1.85"
 
+[lib]
+name = "cove_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "cove"
 path = "src/main.rs"

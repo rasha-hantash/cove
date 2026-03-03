@@ -46,9 +46,14 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
         "-F",
         "#{window_index}|#{window_name}|#{window_active}|#{pane_current_path}",
     ])?;
+    Ok(parse_window_list(&out))
+}
 
+/// Parse tmux list-windows output into WindowInfo structs.
+/// Format: "index|name|active|path" per line.
+pub fn parse_window_list(output: &str) -> Vec<WindowInfo> {
     let mut windows = Vec::new();
-    for line in out.lines() {
+    for line in output.lines() {
         let parts: Vec<&str> = line.splitn(4, '|').collect();
         if parts.len() < 4 {
             continue;
@@ -60,7 +65,7 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
             pane_path: parts[3].to_string(),
         });
     }
-    Ok(windows)
+    windows
 }
 
 /// List window names only (for duplicate checking).
@@ -291,9 +296,15 @@ pub fn list_pane_commands() -> Result<Vec<PaneInfo>, String> {
         "-F",
         "#{window_index}|#{pane_index}|#{pane_current_command}|#{pane_id}",
     ])?;
+    Ok(parse_pane_list(&out))
+}
 
+/// Parse tmux list-panes output into PaneInfo structs.
+/// Format: "window_index|pane_index|command|pane_id" per line.
+/// Only returns panes with pane_index=1 (the Claude pane).
+pub fn parse_pane_list(output: &str) -> Vec<PaneInfo> {
     let mut panes = Vec::new();
-    for line in out.lines() {
+    for line in output.lines() {
         let parts: Vec<&str> = line.splitn(4, '|').collect();
         if parts.len() < 4 {
             continue;
@@ -308,7 +319,7 @@ pub fn list_pane_commands() -> Result<Vec<PaneInfo>, String> {
             pane_id: parts[3].to_string(),
         });
     }
-    Ok(panes)
+    panes
 }
 
 /// Get the pane_id (e.g. "%5") of pane .1 (the Claude pane) in a specific window.
