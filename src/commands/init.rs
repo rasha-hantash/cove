@@ -32,11 +32,13 @@ pub fn hooks_installed(path: &Path) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    // Must have the wildcard pre-tool hook (detects old installs with specific matchers)
-    // AND point to the current binary (detects stale paths after rename/move)
+    // Must have both the wildcard pre-tool hook AND the session-end hook
+    // (detects old installs missing newer hooks) AND point to the current
+    // binary (detects stale paths after rename/move).
     let bin = cove_bin_path();
     let pre_tool_cmd = format!("{bin} hook pre-tool");
-    content.contains(&pre_tool_cmd)
+    let session_end_cmd = format!("{bin} hook session-end");
+    content.contains(&pre_tool_cmd) && content.contains(&session_end_cmd)
 }
 
 /// Install Cove hooks into settings.json.
@@ -123,6 +125,7 @@ fn install_hooks_with_bin(path: &Path, bin: &str) -> Result<(), String> {
         ("Stop", "*", "hook stop"),
         ("PreToolUse", "*", "hook pre-tool"),
         ("PostToolUse", "*", "hook post-tool"),
+        ("SessionEnd", "*", "hook session-end"),
     ];
 
     // Remove stale cove hooks once per hook_type before adding new ones.
@@ -188,6 +191,7 @@ pub fn run() -> Result<(), String> {
     println!("  Stop              → cove hook stop");
     println!("  PreToolUse(*)     → cove hook pre-tool");
     println!("  PostToolUse(*)    → cove hook post-tool");
+    println!("  SessionEnd        → cove hook session-end");
 
     Ok(())
 }
@@ -250,6 +254,7 @@ mod tests {
         assert!(content.contains("cove hook stop"));
         assert!(content.contains("cove hook pre-tool"));
         assert!(content.contains("cove hook post-tool"));
+        assert!(content.contains("cove hook session-end"));
 
         let parsed: Value = serde_json::from_str(&content).unwrap();
         let hooks = parsed["hooks"].as_object().unwrap();
@@ -257,6 +262,7 @@ mod tests {
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["SessionEnd"].as_array().unwrap().len(), 1);
 
         // PreToolUse and PostToolUse should use wildcard matchers
         let pre = hooks["PreToolUse"].as_array().unwrap();
@@ -315,6 +321,7 @@ mod tests {
         assert_eq!(hooks["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["PreToolUse"].as_array().unwrap().len(), 1);
         assert_eq!(hooks["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(hooks["SessionEnd"].as_array().unwrap().len(), 1);
     }
 
     #[test]

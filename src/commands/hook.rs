@@ -68,6 +68,7 @@ pub fn run(event: HookEvent) -> Result<(), String> {
     let state = match event {
         HookEvent::UserPrompt | HookEvent::AskDone | HookEvent::PostTool => "working",
         HookEvent::Stop => "idle",
+        HookEvent::SessionEnd => "end",
         HookEvent::Ask => "asking",
         HookEvent::PreTool => {
             if ASKING_TOOLS.contains(&hook.tool_name.as_str()) {
