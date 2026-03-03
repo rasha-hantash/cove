@@ -53,4 +53,6 @@ pub enum HookEvent {
     PreTool,
     /// Claude finished using a tool (PostToolUse hook, wildcard matcher)
     PostTool,
+    /// Claude session ended (SessionEnd hook)
+    SessionEnd,
 }
