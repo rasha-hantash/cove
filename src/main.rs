@@ -1,6 +1,7 @@
 mod cli;
 mod colors;
 mod commands;
+mod events;
 mod naming;
 mod sidebar;
 mod tmux;

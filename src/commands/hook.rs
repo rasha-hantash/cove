@@ -10,13 +10,14 @@
 //   PostToolUse                            → working
 //   Stop                                   → idle
 
-use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io::{self, Read};
+use std::path::Path;
 
 use serde::Deserialize;
 
 use crate::cli::HookEvent;
+use crate::events;
 use crate::naming;
 use crate::tmux;
 
@@ -31,40 +32,10 @@ struct HookInput {
     tool_name: String,
 }
 
-// ── Helpers ──
-
-fn events_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".cove").join("events")
-}
-
-/// Append a state event to the session's event file.
-fn write_event(session_id: &str, cwd: &str, pane_id: &str, state: &str) -> Result<(), String> {
-    let dir = events_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("create events dir: {e}"))?;
-
-    let path = dir.join(format!("{session_id}.jsonl"));
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("open event file: {e}"))?;
-
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-
-    let line = format!(r#"{{"state":"{state}","cwd":"{cwd}","pane_id":"{pane_id}","ts":{ts}}}"#);
-    writeln!(file, "{line}").map_err(|e| format!("write event: {e}"))?;
-
-    Ok(())
-}
-
 /// Check if the session's event file contains at least one "working" entry,
 /// proving the user has submitted a prompt in this session.
 fn has_working_event(session_id: &str) -> bool {
-    has_working_event_in(session_id, &events_dir())
+    has_working_event_in(session_id, &events::events_dir())
 }
 
 fn has_working_event_in(session_id: &str, dir: &Path) -> bool {
@@ -117,7 +88,7 @@ pub fn run(event: HookEvent) -> Result<(), String> {
     // This lets the sidebar distinguish sessions even when they share a cwd.
     let pane_id = std::env::var("TMUX_PANE").unwrap_or_default();
 
-    write_event(&hook.session_id, &hook.cwd, &pane_id, state)?;
+    events::write_event(&hook.session_id, &hook.cwd, &pane_id, state)?;
 
     // Auto-update window name if the branch changed (e.g. Claude switched branches
     // or created a worktree). Silently ignore errors — hooks must never block Claude.
@@ -144,6 +115,7 @@ fn maybe_rename_window(cwd: &str, pane_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::OpenOptions;
     use std::io::Write;
 
     #[test]

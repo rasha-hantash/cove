@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use std::{io, thread};
 
+use crate::events;
 use crate::sidebar::state::WindowState;
 use crate::tmux::WindowInfo;
 
@@ -199,37 +200,6 @@ impl ContextManager {
 
 // ── Session Lookup ──
 
-/// Find the Claude session_id for a given tmux pane_id by scanning cove event files.
-fn find_session_id(pane_id: &str) -> Option<String> {
-    let home = std::env::var("HOME").ok()?;
-    let events_dir = PathBuf::from(&home).join(".cove").join("events");
-    let entries = fs::read_dir(&events_dir).ok()?;
-
-    let mut best: Option<(String, u64)> = None;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-            continue;
-        }
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let last_line = content.lines().rev().find(|l| !l.trim().is_empty());
-        if let Some(line) = last_line {
-            if let Ok(event) = serde_json::from_str::<serde_json::Value>(line) {
-                if event.get("pane_id").and_then(|v| v.as_str()) == Some(pane_id) {
-                    let ts = event.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-                    if best.as_ref().is_none_or(|(_, prev_ts)| ts > *prev_ts) {
-                        if let Some(sid) = path.file_stem().and_then(|s| s.to_str()) {
-                            best = Some((sid.to_string(), ts));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    best.map(|(sid, _)| sid)
-}
-
 /// Derive the Claude project directory from a cwd.
 fn claude_project_dir(cwd: &str) -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -242,7 +212,7 @@ fn claude_project_dir(cwd: &str) -> PathBuf {
 
 /// Find the Claude session JSONL file for a given pane.
 fn find_session_file(cwd: &str, pane_id: &str) -> Option<PathBuf> {
-    let session_id = find_session_id(pane_id)?;
+    let session_id = events::find_session_id(pane_id)?;
     let project_dir = claude_project_dir(cwd);
     let path = project_dir.join(format!("{session_id}.jsonl"));
     if path.exists() { Some(path) } else { None }

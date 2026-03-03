@@ -9,10 +9,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::events;
 use crate::tmux;
 
 // ── Types ──
@@ -45,11 +46,6 @@ struct EventEntry {
 }
 
 // ── Helpers ──
-
-fn events_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".cove").join("events")
-}
 
 /// Read the last line of a file efficiently.
 /// Returns None if the file is empty or unreadable.
@@ -140,7 +136,7 @@ fn state_from_str(s: &str) -> WindowState {
 /// Called when a new window is created to prevent stale events (from a previous
 /// session that used the same recycled tmux pane_id) from contaminating state.
 pub fn purge_events_for_pane(pane_id: &str) {
-    let dir = events_dir();
+    let dir = events::events_dir();
     let entries = match fs::read_dir(&dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -200,7 +196,7 @@ impl StateDetector {
             .collect();
 
         // Load all latest events once per detect cycle
-        let events = load_latest_events(&events_dir());
+        let events = load_latest_events(&events::events_dir());
 
         for win in windows {
             let cmd = pane_cmds.get(&win.index).copied().unwrap_or("zsh");
@@ -415,7 +411,7 @@ mod tests {
         .unwrap();
 
         // Call purge with a custom dir (can't use purge_events_for_pane directly
-        // since it uses events_dir(), so test the logic inline)
+        // since it uses events::events_dir(), so test the logic inline)
         let entries = fs::read_dir(dir.path()).unwrap();
         for entry in entries.flatten() {
             let path = entry.path();
