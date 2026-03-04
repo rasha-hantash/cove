@@ -37,7 +37,6 @@ pub enum WindowState {
 #[derive(Deserialize)]
 struct EventEntry {
     state: String,
-    #[allow(dead_code)]
     cwd: String,
     /// Tmux pane ID (e.g. "%0") — used to match events to windows.
     #[serde(default)]
@@ -86,18 +85,25 @@ pub fn read_last_line(path: &Path) -> Option<String> {
     last
 }
 
+/// State and cwd from the latest event for a pane.
+#[derive(Debug)]
+pub struct LatestEvent {
+    pub state: String,
+    pub cwd: String,
+}
+
 /// Load the latest event from each event file in the events directory.
-/// Returns a map of pane_id → state, keeping only the highest-timestamp entry
-/// per pane_id. This deduplicates across multiple files that share a recycled
-/// pane ID, ensuring the current session's events always win.
-pub fn load_latest_events(dir: &Path) -> HashMap<String, String> {
+/// Returns a map of pane_id → LatestEvent, keeping only the highest-timestamp
+/// entry per pane_id. This deduplicates across multiple files that share a
+/// recycled pane ID, ensuring the current session's events always win.
+pub fn load_latest_events(dir: &Path) -> HashMap<String, LatestEvent> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return HashMap::new(),
     };
 
-    // Track (state, timestamp) per pane_id — keep highest timestamp
-    let mut best: HashMap<String, (String, u64)> = HashMap::new();
+    // Track (state, cwd, timestamp) per pane_id — keep highest timestamp
+    let mut best: HashMap<String, (String, String, u64)> = HashMap::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
@@ -108,16 +114,18 @@ pub fn load_latest_events(dir: &Path) -> HashMap<String, String> {
                 if !event.pane_id.is_empty() {
                     let replace = best
                         .get(&event.pane_id)
-                        .is_none_or(|(_, prev_ts)| event.ts > *prev_ts);
+                        .is_none_or(|(_, _, prev_ts)| event.ts > *prev_ts);
                     if replace {
-                        best.insert(event.pane_id, (event.state, event.ts));
+                        best.insert(event.pane_id, (event.state, event.cwd, event.ts));
                     }
                 }
             }
         }
     }
 
-    best.into_iter().map(|(k, (state, _))| (k, state)).collect()
+    best.into_iter()
+        .map(|(k, (state, cwd, _))| (k, LatestEvent { state, cwd }))
+        .collect()
 }
 
 pub fn state_from_str(s: &str) -> WindowState {
@@ -163,6 +171,7 @@ pub fn purge_events_for_pane_in(dir: &Path, pane_id: &str) {
 
 pub struct StateDetector {
     pane_ids: HashMap<u32, String>,
+    cwds: HashMap<u32, String>,
 }
 
 impl Default for StateDetector {
@@ -175,12 +184,18 @@ impl StateDetector {
     pub fn new() -> Self {
         Self {
             pane_ids: HashMap::new(),
+            cwds: HashMap::new(),
         }
     }
 
     /// Get the tmux pane_id (e.g. "%5") for a window's Claude pane.
     pub fn pane_id(&self, window_index: u32) -> Option<&str> {
         self.pane_ids.get(&window_index).map(String::as_str)
+    }
+
+    /// Get the cwd from the latest event for a window's Claude pane.
+    pub fn cwd(&self, window_index: u32) -> Option<&str> {
+        self.cwds.get(&window_index).map(String::as_str)
     }
 
     /// Detect the state of each window. Returns a map from window_index to state.
@@ -208,6 +223,9 @@ impl StateDetector {
         // Load all latest events once per detect cycle
         let events = load_latest_events(&events::events_dir());
 
+        // Clear cwds — will be repopulated from events
+        self.cwds.clear();
+
         for win in windows {
             let cmd = pane_cmds.get(&win.index).copied().unwrap_or("zsh");
 
@@ -220,7 +238,12 @@ impl StateDetector {
             // Match event by pane_id — each tmux pane has a unique ID like "%0"
             let win_pane_id = pane_ids.get(&win.index).copied().unwrap_or("");
             let state = match events.get(win_pane_id) {
-                Some(state_str) => state_from_str(state_str),
+                Some(latest) => {
+                    if !latest.cwd.is_empty() {
+                        self.cwds.insert(win.index, latest.cwd.clone());
+                    }
+                    state_from_str(&latest.state)
+                }
                 None => WindowState::Fresh,
             };
 
@@ -301,8 +324,10 @@ mod tests {
 
         let events = load_latest_events(dir.path());
         assert_eq!(events.len(), 2);
-        assert_eq!(events["%0"], "idle");
-        assert_eq!(events["%3"], "asking");
+        assert_eq!(events["%0"].state, "idle");
+        assert_eq!(events["%0"].cwd, "/project-a");
+        assert_eq!(events["%3"].state, "asking");
+        assert_eq!(events["%3"].cwd, "/project-b");
     }
 
     #[test]
@@ -328,8 +353,8 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         // Each should match to its own pane, not cross-contaminate
-        assert_eq!(events["%0"], "working");
-        assert_eq!(events["%3"], "idle");
+        assert_eq!(events["%0"].state, "working");
+        assert_eq!(events["%3"].state, "idle");
     }
 
     #[test]
@@ -355,7 +380,8 @@ mod tests {
         let events = load_latest_events(dir.path());
         assert_eq!(events.len(), 1);
         // Newer timestamp wins — "working" from ts:2000 beats "idle" from ts:1000
-        assert_eq!(events["%0"], "working");
+        assert_eq!(events["%0"].state, "working");
+        assert_eq!(events["%0"].cwd, "/new");
     }
 
     #[test]

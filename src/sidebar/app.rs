@@ -73,10 +73,13 @@ fn run_loop() -> Result<(), String> {
 
         // Context orchestration: prefetch, drain, handle selection changes
         let detector = &app.detector;
-        app.context_mgr
-            .tick(&app.windows, &app.states, app.selected, &|idx| {
-                detector.pane_id(idx).map(str::to_string)
-            });
+        app.context_mgr.tick(
+            &app.windows,
+            &app.states,
+            app.selected,
+            &|idx| detector.pane_id(idx).map(str::to_string),
+            &|idx| detector.cwd(idx).map(str::to_string),
+        );
 
         // Prepare context for rendering
         let context = app

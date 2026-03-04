@@ -77,7 +77,8 @@ fn fresh_session_no_context() {
         [(1, state::WindowState::Fresh)].into_iter().collect();
     let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
 
-    mgr.tick(&windows, &states, 0, &|idx| panes.get(&idx).cloned());
+    let no_cwd = |_idx: u32| -> Option<String> { None };
+    mgr.tick(&windows, &states, 0, &|idx| panes.get(&idx).cloned(), &no_cwd);
 
     // Generator should NOT have been called for a Fresh window
     assert!(
