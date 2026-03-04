@@ -1,19 +1,17 @@
 // ── Background context generation for sessions ──
 //
 // Reads Claude session JSONL files directly, extracts conversation text,
-// then calls `claude -p` with a compact prompt (no session resume).
-// This avoids the ~600KB context reload that `claude -c` would trigger.
+// then calls a local Ollama instance to generate a summary.
 // Results flow back via mpsc channel so the sidebar event loop never blocks.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
-use std::{io, thread};
 
 use crate::events;
 use crate::sidebar::state::WindowState;
@@ -21,12 +19,14 @@ use crate::tmux::WindowInfo;
 
 // ── Types ──
 
-type GeneratorFn = Arc<dyn Fn(&str, &str) -> Option<String> + Send + Sync>;
+type GeneratorFn = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
 
 pub struct ContextManager {
     contexts: HashMap<String, String>,
     in_flight: HashSet<String>,
     failed: HashMap<String, Instant>,
+    /// Last error message per window — displayed in the UI when context generation fails.
+    errors: HashMap<String, String>,
     tx: mpsc::Sender<(String, Result<String, String>)>,
     rx: mpsc::Receiver<(String, Result<String, String>)>,
     generator: GeneratorFn,
@@ -48,7 +48,7 @@ const CONVERSATION_BUDGET: usize = 6000;
 /// Max chars per individual message (truncate long code blocks, etc.).
 const MESSAGE_TRUNCATE: usize = 300;
 
-const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(30);
+const API_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 
 // ── Diagnostic Logging ──
@@ -80,6 +80,7 @@ impl ContextManager {
             contexts: HashMap::new(),
             in_flight: HashSet::new(),
             failed: HashMap::new(),
+            errors: HashMap::new(),
             tx,
             rx,
             generator: Arc::new(generate_context),
@@ -89,13 +90,14 @@ impl ContextManager {
     }
 
     pub fn with_generator(
-        generator_fn: impl Fn(&str, &str) -> Option<String> + Send + Sync + 'static,
+        generator_fn: impl Fn(&str, &str) -> Result<String, String> + Send + Sync + 'static,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
             contexts: HashMap::new(),
             in_flight: HashSet::new(),
             failed: HashMap::new(),
+            errors: HashMap::new(),
             tx,
             rx,
             generator: Arc::new(generator_fn),
@@ -110,10 +112,12 @@ impl ContextManager {
             self.in_flight.remove(&name);
             match result {
                 Ok(context) => {
+                    self.errors.remove(&name);
                     self.contexts.insert(name, context);
                 }
                 Err(reason) => {
                     log_context(&format!("failed for {name}: {reason}"));
+                    self.errors.insert(name.clone(), reason);
                     self.failed.insert(name, Instant::now());
                 }
             }
@@ -123,6 +127,11 @@ impl ContextManager {
     /// Get the context for a window, if available.
     pub fn get(&self, name: &str) -> Option<&str> {
         self.contexts.get(name).map(String::as_str)
+    }
+
+    /// Get the last error for a window, if generation failed.
+    pub fn get_error(&self, name: &str) -> Option<&str> {
+        self.errors.get(name).map(String::as_str)
     }
 
     /// Whether a context request is currently running for this window.
@@ -221,13 +230,14 @@ impl ContextManager {
         self.spawn(name, cwd, pane_id);
     }
 
-    /// Force-refresh context for a window (clears cache/failed, respects in_flight).
+    /// Force-refresh context for a window (clears cache/failed/errors, respects in_flight).
     pub fn refresh(&mut self, name: &str, cwd: &str, pane_id: &str) {
         if self.in_flight.contains(name) {
             return;
         }
         self.contexts.remove(name);
         self.failed.remove(name);
+        self.errors.remove(name);
         self.spawn(name, cwd, pane_id);
     }
 
@@ -239,10 +249,7 @@ impl ContextManager {
         let pane_id = pane_id.to_string();
         let generator = Arc::clone(&self.generator);
         thread::spawn(move || {
-            let result = match generator(&cwd, &pane_id) {
-                Some(ctx) => Ok(ctx),
-                None => Err("generator returned None".to_string()),
-            };
+            let result = generator(&cwd, &pane_id);
             let _ = tx.send((name, result));
         });
     }
@@ -380,79 +387,63 @@ fn extract_conversation(path: &Path) -> Option<String> {
 
 // ── Context Generation ──
 
-fn generate_context(cwd: &str, pane_id: &str) -> Option<String> {
-    let session_path = match find_session_file(cwd, pane_id) {
-        Some(p) => p,
-        None => {
-            log_context(&format!("no session file: cwd={cwd} pane_id={pane_id}"));
-            return None;
-        }
-    };
-    let conversation = match extract_conversation(&session_path) {
-        Some(c) => c,
-        None => {
-            log_context(&format!("no conversation: path={}", session_path.display()));
-            return None;
-        }
-    };
+fn generate_context(cwd: &str, pane_id: &str) -> Result<String, String> {
+    let session_path = find_session_file(cwd, pane_id)
+        .ok_or_else(|| format!("no session file: cwd={cwd} pane_id={pane_id}"))?;
+    let conversation = extract_conversation(&session_path)
+        .ok_or_else(|| format!("no conversation: path={}", session_path.display()))?;
 
     let prompt = format!("{SUMMARY_PROMPT}\n\nConversation:\n{conversation}");
+    call_ollama(&prompt)
+}
 
-    // Fresh claude -p call — no -c, no session resume, no large context reload.
-    // Must clear CLAUDECODE env var to avoid "nested session" detection,
-    // since the sidebar itself runs inside a Claude Code session.
-    let mut child = match Command::new("claude")
-        .args(["-p", &prompt, "--max-turns", "1", "--model", "haiku"])
-        .current_dir(cwd)
-        .env_remove("CLAUDECODE")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log_context(&format!("claude spawn failed: {e}"));
-            return None;
-        }
-    };
+const OLLAMA_DEFAULT_MODEL: &str = "llama3.2";
 
-    let deadline = Instant::now() + SUBPROCESS_TIMEOUT;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    log_context("claude timed out after 30s");
-                    return None;
-                }
-                thread::sleep(Duration::from_millis(200));
+fn call_ollama(prompt: &str) -> Result<String, String> {
+    let model =
+        std::env::var("COVE_OLLAMA_MODEL").unwrap_or_else(|_| OLLAMA_DEFAULT_MODEL.to_string());
+
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(API_TIMEOUT))
+        .build();
+    let agent: ureq::Agent = config.into();
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": false
+    });
+
+    let mut response = agent
+        .post("http://localhost:11434/api/chat")
+        .send_json(&body)
+        .map_err(|e| {
+            if e.to_string().contains("Connection refused") {
+                "Ollama not connected".to_string()
+            } else {
+                format!("Ollama request failed: {e}")
             }
-            Err(e) => {
-                log_context(&format!("claude try_wait failed: {e}"));
-                return None;
-            }
-        }
-    };
+        })?;
 
-    if !status.success() {
-        log_context(&format!("claude exited {}", status));
-        return None;
-    }
+    let response_text = response
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| format!("read response failed: {e}"))?;
 
-    let mut stdout = child.stdout.take()?;
-    let mut text = String::new();
-    if let Err(e) = io::Read::read_to_string(&mut stdout, &mut text) {
-        log_context(&format!("read claude stdout failed: {e}"));
-        return None;
-    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response_text).map_err(|e| format!("parse response failed: {e}"))?;
+
+    let text = parsed
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| "no text in Ollama response".to_string())?;
+
     let text = text.trim().to_string();
     if text.is_empty() {
-        log_context("claude returned empty output");
-        None
+        Err("Ollama returned empty text".to_string())
     } else {
-        Some(text)
+        Ok(text)
     }
 }
 
@@ -603,17 +594,17 @@ mod tests {
 
     /// Build a mock generator that tracks calls and returns controlled results.
     fn mock_generator() -> (
-        impl Fn(&str, &str) -> Option<String> + Send + Sync + 'static,
+        impl Fn(&str, &str) -> Result<String, String> + Send + Sync + 'static,
         Arc<Mutex<Vec<(String, String)>>>,
     ) {
         let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
         let calls_clone = Arc::clone(&calls);
-        let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+        let generator = move |cwd: &str, pane_id: &str| -> Result<String, String> {
             calls_clone
                 .lock()
                 .unwrap()
                 .push((cwd.to_string(), pane_id.to_string()));
-            Some(format!("context for {pane_id}"))
+            Ok(format!("context for {pane_id}"))
         };
         (generator, calls)
     }
@@ -760,9 +751,9 @@ mod tests {
         // Use a slow generator that blocks until signaled
         let barrier = Arc::new(std::sync::Barrier::new(2));
         let barrier_clone = Arc::clone(&barrier);
-        let slow_generator = move |_cwd: &str, _pane_id: &str| -> Option<String> {
+        let slow_generator = move |_cwd: &str, _pane_id: &str| -> Result<String, String> {
             barrier_clone.wait();
-            Some("generated context".to_string())
+            Ok("generated context".to_string())
         };
         let mut mgr = ContextManager::with_generator(slow_generator);
 
@@ -966,13 +957,13 @@ mod tests {
         let call_count = Arc::new(Mutex::new(0u32));
         let call_count_clone = Arc::clone(&call_count);
         // Generator fails on first call, succeeds on second
-        let generator = move |_cwd: &str, _pane_id: &str| -> Option<String> {
+        let generator = move |_cwd: &str, _pane_id: &str| -> Result<String, String> {
             let mut count = call_count_clone.lock().unwrap();
             *count += 1;
             if *count == 1 {
-                None // fail first time
+                Err("simulated failure".to_string())
             } else {
-                Some("generated context".to_string())
+                Ok("generated context".to_string())
             }
         };
         let mut mgr = ContextManager::with_generator(generator);

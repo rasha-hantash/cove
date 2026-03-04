@@ -48,6 +48,8 @@ pub struct SidebarWidget<'a> {
     pub context: Option<&'a str>,
     /// Whether context is currently being generated for the selected session.
     pub context_loading: bool,
+    /// Error message when context generation failed (e.g. "Ollama not connected").
+    pub context_error: Option<&'a str>,
 }
 
 // ── Public API ──
@@ -90,8 +92,8 @@ impl Widget for SidebarWidget<'_> {
             let max_width = (area.width as usize).saturating_sub(3);
             let text_lines = wrap_text(context, max_width, 3).len() as u16;
             1 + text_lines // dashed separator + text lines
-        } else if self.context_loading {
-            2 // dashed separator + "loading…"
+        } else if self.context_loading || self.context_error.is_some() {
+            2 // dashed separator + "loading…" or error message
         } else {
             0
         };
@@ -167,6 +169,8 @@ impl Widget for SidebarWidget<'_> {
                     render_context_block(buf, area, context_start, right_col, context);
                 } else if self.context_loading {
                     render_loading_block(buf, area, context_start);
+                } else if let Some(error) = self.context_error {
+                    render_error_block(buf, area, context_start, error);
                 }
             }
         }
@@ -256,6 +260,32 @@ fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16) {
                 "loading\u{2026}",
                 Style::default()
                     .fg(colors::OVERLAY)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]);
+        buf.set_line(area.x, y, &line, area.width);
+    }
+}
+
+/// Render the dashed separator + error message (dimmed).
+fn render_error_block(buf: &mut Buffer, area: Rect, mut y: u16, message: &str) {
+    // Dashed separator (full width with 1-char padding on each side)
+    if y < area.y + area.height {
+        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
+            buf.cell_mut((x, y))
+                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
+        }
+        y += 1;
+    }
+
+    // Error message
+    if y < area.y + area.height {
+        let line = Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                message.to_string(),
+                Style::default()
+                    .fg(colors::SURFACE)
                     .add_modifier(Modifier::ITALIC),
             ),
         ]);
@@ -395,6 +425,7 @@ mod tests {
             tick: 0,
             context: None,
             context_loading: false,
+            context_error: None,
         };
         widget.render(area, &mut buf);
 
@@ -424,6 +455,7 @@ mod tests {
             tick: 0,
             context: None,
             context_loading: true,
+            context_error: None,
         };
         widget.render(area, &mut buf);
 
@@ -454,6 +486,7 @@ mod tests {
             tick: 0,
             context: Some(context_text),
             context_loading: false,
+            context_error: None,
         };
         widget.render(area, &mut buf);
 
@@ -488,6 +521,7 @@ mod tests {
             tick: 0,
             context: None,
             context_loading: true,
+            context_error: None,
         };
         widget.render(area, &mut buf);
 
@@ -516,6 +550,7 @@ mod tests {
             tick: 0,
             context: None,
             context_loading: true,
+            context_error: None,
         };
         widget.render(area, &mut buf);
 

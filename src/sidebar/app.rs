@@ -90,6 +90,10 @@ fn run_loop() -> Result<(), String> {
             .windows
             .get(app.selected)
             .is_some_and(|win| app.context_mgr.is_loading(&win.name));
+        let context_error = app
+            .windows
+            .get(app.selected)
+            .and_then(|win| app.context_mgr.get_error(&win.name));
 
         // Render
         terminal
@@ -102,6 +106,7 @@ fn run_loop() -> Result<(), String> {
                     tick: app.tick,
                     context,
                     context_loading,
+                    context_error,
                 };
                 frame.render_widget(widget, area);
             })

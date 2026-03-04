@@ -72,7 +72,8 @@ fn context_tick_latency() {
     use std::collections::HashMap;
 
     // Mock generator that returns instantly
-    let mgr_generator = |_cwd: &str, _pane_id: &str| -> Option<String> { None };
+    let mgr_generator =
+        |_cwd: &str, _pane_id: &str| -> Result<String, String> { Err("mock".to_string()) };
     let mut mgr = ContextManager::with_generator(mgr_generator);
 
     // Build 10 windows, all Fresh (no context generation should fire)

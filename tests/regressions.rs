@@ -58,12 +58,12 @@ fn fresh_session_no_context() {
 
     let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let calls_clone = Arc::clone(&calls);
-    let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+    let generator = move |cwd: &str, pane_id: &str| -> Result<String, String> {
         calls_clone
             .lock()
             .unwrap()
             .push((cwd.to_string(), pane_id.to_string()));
-        Some("context".to_string())
+        Ok("context".to_string())
     };
     let mut mgr = ContextManager::with_generator(generator);
 
@@ -129,12 +129,12 @@ fn context_uses_event_cwd_not_pane_path() {
 
     let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let calls_clone = Arc::clone(&calls);
-    let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+    let generator = move |cwd: &str, pane_id: &str| -> Result<String, String> {
         calls_clone
             .lock()
             .unwrap()
             .push((cwd.to_string(), pane_id.to_string()));
-        Some("context".to_string())
+        Ok("context".to_string())
     };
     let mut mgr = ContextManager::with_generator(generator);
 
@@ -188,12 +188,12 @@ fn context_falls_back_to_pane_path_when_no_event_cwd() {
 
     let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     let calls_clone = Arc::clone(&calls);
-    let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+    let generator = move |cwd: &str, pane_id: &str| -> Result<String, String> {
         calls_clone
             .lock()
             .unwrap()
             .push((cwd.to_string(), pane_id.to_string()));
-        Some("context".to_string())
+        Ok("context".to_string())
     };
     let mut mgr = ContextManager::with_generator(generator);
 
