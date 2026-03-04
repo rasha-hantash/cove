@@ -78,7 +78,13 @@ fn fresh_session_no_context() {
     let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
 
     let no_cwd = |_idx: u32| -> Option<String> { None };
-    mgr.tick(&windows, &states, 0, &|idx| panes.get(&idx).cloned(), &no_cwd);
+    mgr.tick(
+        &windows,
+        &states,
+        0,
+        &|idx| panes.get(&idx).cloned(),
+        &no_cwd,
+    );
 
     // Generator should NOT have been called for a Fresh window
     assert!(
@@ -105,6 +111,121 @@ fn idle_suppressed_before_first_prompt() {
     assert!(
         !has_working,
         "idle-only session should not have a working event"
+    );
+}
+
+/// Bug #5: Context generation used wrong cwd (tmux pane_path instead of event cwd).
+/// When the user is focused on the terminal pane (not the Claude pane), or when
+/// Claude is in a worktree, tmux's #{pane_current_path} diverges from Claude's
+/// actual project directory. The context generator then can't find the session file.
+///
+/// Fix: get cwd from cove event files (written by hooks from $PWD) instead of tmux.
+/// cwd_for closure takes priority; pane_path is only a fallback.
+#[test]
+fn context_uses_event_cwd_not_pane_path() {
+    use cove_cli::sidebar::context::ContextManager;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let calls_clone = Arc::clone(&calls);
+    let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+        calls_clone
+            .lock()
+            .unwrap()
+            .push((cwd.to_string(), pane_id.to_string()));
+        Some("context".to_string())
+    };
+    let mut mgr = ContextManager::with_generator(generator);
+
+    // Window's pane_path is the terminal pane's cwd (wrong)
+    let windows = vec![cove_cli::tmux::WindowInfo {
+        index: 1,
+        name: "session-worktree".to_string(),
+        is_active: true,
+        pane_path: "/Users/test/terminal/cwd".to_string(),
+    }];
+    let states: HashMap<u32, state::WindowState> =
+        [(1, state::WindowState::Idle)].into_iter().collect();
+    let panes: HashMap<u32, String> = [(1, "%5".into())].into_iter().collect();
+
+    // Event cwd is Claude's actual project directory (correct)
+    let event_cwds: HashMap<u32, String> = [(1, "/Users/test/workspace/project".into())]
+        .into_iter()
+        .collect();
+
+    mgr.tick(
+        &windows,
+        &states,
+        0,
+        &|idx| panes.get(&idx).cloned(),
+        &|idx| event_cwds.get(&idx).cloned(),
+    );
+
+    // Wait for background thread
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    mgr.drain();
+
+    // Generator should have been called with the EVENT cwd, not the pane_path
+    let recorded = calls.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1, "generator should fire once");
+    assert_eq!(
+        recorded[0].0, "/Users/test/workspace/project",
+        "should use event cwd, not pane_path"
+    );
+    assert_ne!(
+        recorded[0].0, "/Users/test/terminal/cwd",
+        "must NOT use pane_path when event cwd is available"
+    );
+}
+
+/// Bug #5 related: When event cwd is unavailable (no events yet), fall back to pane_path.
+#[test]
+fn context_falls_back_to_pane_path_when_no_event_cwd() {
+    use cove_cli::sidebar::context::ContextManager;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    let calls: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let calls_clone = Arc::clone(&calls);
+    let generator = move |cwd: &str, pane_id: &str| -> Option<String> {
+        calls_clone
+            .lock()
+            .unwrap()
+            .push((cwd.to_string(), pane_id.to_string()));
+        Some("context".to_string())
+    };
+    let mut mgr = ContextManager::with_generator(generator);
+
+    let windows = vec![cove_cli::tmux::WindowInfo {
+        index: 1,
+        name: "session-fallback".to_string(),
+        is_active: true,
+        pane_path: "/fallback/path".to_string(),
+    }];
+    let states: HashMap<u32, state::WindowState> =
+        [(1, state::WindowState::Idle)].into_iter().collect();
+    let panes: HashMap<u32, String> = [(1, "%5".into())].into_iter().collect();
+
+    // No event cwd available
+    let no_cwd = |_idx: u32| -> Option<String> { None };
+
+    mgr.tick(
+        &windows,
+        &states,
+        0,
+        &|idx| panes.get(&idx).cloned(),
+        &no_cwd,
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    mgr.drain();
+
+    let recorded = calls.lock().unwrap().clone();
+    assert_eq!(recorded.len(), 1, "generator should fire once");
+    assert_eq!(
+        recorded[0].0, "/fallback/path",
+        "should fall back to pane_path when no event cwd"
     );
 }
 

@@ -89,7 +89,13 @@ fn context_tick_latency() {
 
     let start = Instant::now();
     let no_cwd = |_idx: u32| -> Option<String> { None };
-    mgr.tick(&windows, &states, 0, &|idx| panes.get(&idx).cloned(), &no_cwd);
+    mgr.tick(
+        &windows,
+        &states,
+        0,
+        &|idx| panes.get(&idx).cloned(),
+        &no_cwd,
+    );
     let elapsed = start.elapsed();
 
     assert!(

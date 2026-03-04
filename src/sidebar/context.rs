@@ -167,8 +167,8 @@ impl ContextManager {
                         .unwrap_or(WindowState::Fresh);
                     if state != WindowState::Fresh {
                         let pane_id = pane_id_for(prev_win.index).unwrap_or_default();
-                        let cwd = cwd_for(prev_win.index)
-                            .unwrap_or_else(|| prev_win.pane_path.clone());
+                        let cwd =
+                            cwd_for(prev_win.index).unwrap_or_else(|| prev_win.pane_path.clone());
                         self.refresh(&prev_win.name, &cwd, &pane_id);
                     }
                 }
@@ -258,7 +258,10 @@ fn extract_conversation(path: &Path) -> Option<String> {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            log_context(&format!("read session file failed: {}: {e}", path.display()));
+            log_context(&format!(
+                "read session file failed: {}: {e}",
+                path.display()
+            ));
             return None;
         }
     };
@@ -348,10 +351,7 @@ fn generate_context(cwd: &str, pane_id: &str) -> Option<String> {
     let conversation = match extract_conversation(&session_path) {
         Some(c) => c,
         None => {
-            log_context(&format!(
-                "no conversation: path={}",
-                session_path.display()
-            ));
+            log_context(&format!("no conversation: path={}", session_path.display()));
             return None;
         }
     };
