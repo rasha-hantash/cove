@@ -14,7 +14,7 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum Command {
     /// List active sessions
     #[command(alias = "ls")]
@@ -39,7 +39,7 @@ pub enum Command {
     Init,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum HookEvent {
     /// Claude received a user prompt (UserPromptSubmit hook)
     UserPrompt,

@@ -70,7 +70,6 @@ impl ContextManager {
         }
     }
 
-    #[cfg(test)]
     pub fn with_generator(
         generator_fn: impl Fn(&str, &str) -> Option<String> + Send + Sync + 'static,
     ) -> Self {
