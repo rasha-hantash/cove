@@ -118,6 +118,7 @@ impl ContextManager {
         states: &HashMap<u32, WindowState>,
         selected: usize,
         pane_id_for: &impl Fn(u32) -> Option<String>,
+        cwd_for: &impl Fn(u32) -> Option<String>,
     ) {
         // Prefetch context for all non-fresh sessions
         for win in windows {
@@ -127,7 +128,8 @@ impl ContextManager {
                 .unwrap_or(WindowState::Fresh);
             if state != WindowState::Fresh {
                 let pane_id = pane_id_for(win.index).unwrap_or_default();
-                self.request(&win.name, &win.pane_path, &pane_id);
+                let cwd = cwd_for(win.index).unwrap_or_else(|| win.pane_path.clone());
+                self.request(&win.name, &cwd, &pane_id);
             }
         }
 
@@ -146,7 +148,9 @@ impl ContextManager {
                         .unwrap_or(WindowState::Fresh);
                     if state != WindowState::Fresh {
                         let pane_id = pane_id_for(prev_win.index).unwrap_or_default();
-                        self.refresh(&prev_win.name, &prev_win.pane_path, &pane_id);
+                        let cwd = cwd_for(prev_win.index)
+                            .unwrap_or_else(|| prev_win.pane_path.clone());
+                        self.refresh(&prev_win.name, &cwd, &pane_id);
                     }
                 }
             }
@@ -158,7 +162,8 @@ impl ContextManager {
                     .unwrap_or(WindowState::Fresh);
                 if state != WindowState::Fresh {
                     let pane_id = pane_id_for(win.index).unwrap_or_default();
-                    self.request(&win.name, &win.pane_path, &pane_id);
+                    let cwd = cwd_for(win.index).unwrap_or_else(|| win.pane_path.clone());
+                    self.request(&win.name, &cwd, &pane_id);
                 }
             }
             self.prev_selected_name = current_name;
@@ -525,6 +530,10 @@ mod tests {
         move |idx| map.get(&idx).cloned()
     }
 
+    fn no_cwd(_idx: u32) -> Option<String> {
+        None
+    }
+
     /// Drain results by waiting briefly for background threads to complete.
     fn drain_with_wait(mgr: &mut ContextManager) {
         // Background threads are fast (mock generator returns immediately),
@@ -547,7 +556,7 @@ mod tests {
         let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
 
         // Run a tick with the Fresh session selected
-        mgr.tick(&windows, &states, 0, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
 
         // No generation should have been spawned
         assert!(calls.lock().unwrap().is_empty());
@@ -572,11 +581,11 @@ mod tests {
             [(1, "%0".into()), (2, "%1".into())].into_iter().collect();
 
         // Tick 1: session-1 selected (Fresh)
-        mgr.tick(&windows, &states, 0, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
         assert!(calls.lock().unwrap().is_empty());
 
         // Tick 2: switch to session-2 (also Fresh)
-        mgr.tick(&windows, &states, 1, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 1, &pane_ids(&panes), &no_cwd);
 
         // No generation for either session
         assert!(calls.lock().unwrap().is_empty());
@@ -604,7 +613,7 @@ mod tests {
             [(1, "%0".into()), (2, "%1".into())].into_iter().collect();
 
         // Tick 1: active-session selected (Idle — has had activity)
-        mgr.tick(&windows, &states, 0, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
         drain_with_wait(&mut mgr);
 
         // The prefetch loop should have requested context for the active session
@@ -620,7 +629,7 @@ mod tests {
 
         // Tick 2: switch to new-session (Fresh)
         calls.lock().unwrap().clear();
-        mgr.tick(&windows, &states, 1, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 1, &pane_ids(&panes), &no_cwd);
         // Wait for background thread to complete so calls are recorded
         drain_with_wait(&mut mgr);
 
@@ -664,7 +673,7 @@ mod tests {
             [(1, "%0".into()), (2, "%1".into())].into_iter().collect();
 
         // Tick 1: active-session selected — starts context generation (blocked on barrier)
-        mgr.tick(&windows, &states, 0, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
         // Context is in-flight but blocked, so is_loading should be true
         assert!(
             mgr.is_loading("active-session"),
@@ -673,10 +682,10 @@ mod tests {
 
         // Tick 2: switch to new-session — triggers refresh for active-session
         // But active-session is still in-flight (blocked), so refresh is a no-op
-        mgr.tick(&windows, &states, 1, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 1, &pane_ids(&panes), &no_cwd);
 
         // Tick 3: switch back to active-session — should still show loading
-        mgr.tick(&windows, &states, 0, &pane_ids(&panes));
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
         assert!(
             mgr.is_loading("active-session"),
             "should still be loading when switching back"

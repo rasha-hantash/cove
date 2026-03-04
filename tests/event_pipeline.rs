@@ -18,7 +18,7 @@ fn write_then_read_last_event() {
     events::write_event_to(dir.path(), "session-a", "/project", "%0", "idle").unwrap();
 
     let latest = state::load_latest_events(dir.path());
-    assert_eq!(latest.get("%0").map(String::as_str), Some("idle"));
+    assert_eq!(latest.get("%0").map(|e| e.state.as_str()), Some("idle"));
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn pane_id_dedup_across_files() {
     let latest = state::load_latest_events(dir.path());
     assert_eq!(latest.len(), 1);
     // Higher timestamp wins
-    assert_eq!(latest["%5"], "working");
+    assert_eq!(latest["%5"].state, "working");
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn purge_then_fresh_state() {
 
     let latest = state::load_latest_events(dir.path());
     assert!(latest.get("%3").is_none(), "purged pane should be gone");
-    assert_eq!(latest.get("%0").map(String::as_str), Some("asking"));
+    assert_eq!(latest.get("%0").map(|e| e.state.as_str()), Some("asking"));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn session_end_event() {
     );
 
     let latest = state::load_latest_events(dir.path());
-    assert_eq!(latest["%1"], "end");
+    assert_eq!(latest["%1"].state, "end");
 }
 
 #[test]
