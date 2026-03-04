@@ -344,4 +344,186 @@ mod tests {
         let lines = wrap_text("hello", 0, 3);
         assert!(lines.is_empty());
     }
+
+    // ── Render output validation tests ──
+    //
+    // These tests render the SidebarWidget to a ratatui Buffer and assert
+    // that the actual output contains the expected text. This validates
+    // the full rendering pipeline — layout math, height guards, and content.
+
+    use crate::tmux::WindowInfo;
+
+    fn test_win(index: u32, name: &str) -> WindowInfo {
+        WindowInfo {
+            index,
+            name: name.to_string(),
+            is_active: false,
+            pane_path: format!("/project/{name}"),
+        }
+    }
+
+    /// Extract all text from a ratatui Buffer as a vector of strings (one per row).
+    fn buf_lines(buf: &Buffer, area: Rect) -> Vec<String> {
+        (area.y..area.y + area.height)
+            .map(|y| {
+                (area.x..area.x + area.width)
+                    .map(|x| buf.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "))
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    /// Check if any line in the buffer contains the given substring.
+    fn buf_contains(buf: &Buffer, area: Rect, needle: &str) -> bool {
+        buf_lines(buf, area)
+            .iter()
+            .any(|line| line.contains(needle))
+    }
+
+    #[test]
+    fn test_render_no_context() {
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+
+        let windows = vec![test_win(1, "my-session")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+            context: None,
+            context_loading: false,
+        };
+        widget.render(area, &mut buf);
+
+        // Should show session name but no context or loading
+        assert!(
+            buf_contains(&buf, area, "my-session"),
+            "should show session name"
+        );
+        assert!(
+            !buf_contains(&buf, area, "loading"),
+            "should not show loading"
+        );
+    }
+
+    #[test]
+    fn test_render_loading_state() {
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+
+        let windows = vec![test_win(1, "my-session")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+            context: None,
+            context_loading: true,
+        };
+        widget.render(area, &mut buf);
+
+        // Should show both session name and loading indicator
+        assert!(
+            buf_contains(&buf, area, "my-session"),
+            "should show session name"
+        );
+        assert!(
+            buf_contains(&buf, area, "loading\u{2026}"),
+            "should show loading indicator"
+        );
+    }
+
+    #[test]
+    fn test_render_context_text() {
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+
+        let windows = vec![test_win(1, "my-session")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+        let context_text = "Fixing auth bug in login flow";
+
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+            context: Some(context_text),
+            context_loading: false,
+        };
+        widget.render(area, &mut buf);
+
+        // Should show session name and context text
+        assert!(
+            buf_contains(&buf, area, "my-session"),
+            "should show session name"
+        );
+        assert!(
+            buf_contains(&buf, area, "Fixing auth bug"),
+            "should show context text"
+        );
+        assert!(
+            !buf_contains(&buf, area, "loading"),
+            "should not show loading when context is available"
+        );
+    }
+
+    #[test]
+    fn test_render_context_not_swallowed_in_small_pane() {
+        // Minimum viable pane: header + separator + 1 session + separator + loading = 5 rows
+        let area = Rect::new(0, 0, 40, 5);
+        let mut buf = Buffer::empty(area);
+
+        let windows = vec![test_win(1, "sess")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+            context: None,
+            context_loading: true,
+        };
+        widget.render(area, &mut buf);
+
+        // Loading should still render even in a small pane
+        assert!(
+            buf_contains(&buf, area, "loading\u{2026}"),
+            "loading should render in 5-row pane: {:?}",
+            buf_lines(&buf, area)
+        );
+    }
+
+    #[test]
+    fn test_render_context_swallowed_in_tiny_pane() {
+        // Pane too small: header(1) + sep(1) = body_start at row 2, height 3 → body has 1 row
+        // Context needs 2 rows (sep + loading), context_start = 3-2=1, body_start=2 → guard fails
+        let area = Rect::new(0, 0, 40, 3);
+        let mut buf = Buffer::empty(area);
+
+        let windows = vec![test_win(1, "sess")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+            context: None,
+            context_loading: true,
+        };
+        widget.render(area, &mut buf);
+
+        // In a 3-row pane, context guard correctly prevents rendering
+        // (there's no space for it — this is expected behavior)
+        assert!(
+            !buf_contains(&buf, area, "loading\u{2026}"),
+            "loading should NOT render in 3-row pane (no space)"
+        );
+    }
 }

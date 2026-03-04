@@ -31,6 +31,8 @@ pub struct ContextManager {
     rx: mpsc::Receiver<(String, Result<String, String>)>,
     generator: GeneratorFn,
     prev_selected_name: Option<String>,
+    /// Previous state per window — used to detect transitions and invalidate cache.
+    prev_states: HashMap<String, WindowState>,
 }
 
 // ── Constants ──
@@ -82,6 +84,7 @@ impl ContextManager {
             rx,
             generator: Arc::new(generate_context),
             prev_selected_name: None,
+            prev_states: HashMap::new(),
         }
     }
 
@@ -97,6 +100,7 @@ impl ContextManager {
             rx,
             generator: Arc::new(generator_fn),
             prev_selected_name: None,
+            prev_states: HashMap::new(),
         }
     }
 
@@ -129,8 +133,9 @@ impl ContextManager {
     /// Run one tick of context orchestration.
     ///
     /// - Drains completed results from background threads
-    /// - Requests context for the selected window (lazy — only when viewed)
-    /// - On selection change: refreshes old session (if active), requests new session (if active)
+    /// - Invalidates cache on state transitions (Working → settled)
+    /// - Requests context for the selected window (lazy — only when settled)
+    /// - On selection change: refreshes old session (if settled), requests new session
     pub fn tick(
         &mut self,
         windows: &[WindowInfo],
@@ -142,13 +147,38 @@ impl ContextManager {
         // Drain completed context results first so they're available this tick
         self.drain();
 
-        // Request context for the selected window only (lazy generation)
+        // Detect state transitions and invalidate stale context.
+        // When a session transitions from Working to a settled state (Idle/Asking/Waiting),
+        // the conversation has new content — clear cache so fresh context is generated.
         if let Some(win) = windows.get(selected) {
             let state = states
                 .get(&win.index)
                 .copied()
                 .unwrap_or(WindowState::Fresh);
-            if state != WindowState::Fresh {
+            let prev = self
+                .prev_states
+                .get(&win.name)
+                .copied()
+                .unwrap_or(WindowState::Fresh);
+
+            if prev == WindowState::Working && is_settled(state) {
+                self.contexts.remove(&win.name);
+                self.failed.remove(&win.name);
+            }
+
+            self.prev_states.insert(win.name.clone(), state);
+        }
+
+        // Request context for the selected window only (lazy generation).
+        // Only fire for settled states — Working is too early (conversation incomplete,
+        // subprocess may fail), and failures trigger a 30s retry cooldown that blocks
+        // subsequent attempts when the session actually reaches Idle.
+        if let Some(win) = windows.get(selected) {
+            let state = states
+                .get(&win.index)
+                .copied()
+                .unwrap_or(WindowState::Fresh);
+            if is_settled(state) {
                 let pane_id = pane_id_for(win.index).unwrap_or_default();
                 let cwd = cwd_for(win.index).unwrap_or_else(|| win.pane_path.clone());
                 self.request(&win.name, &cwd, &pane_id);
@@ -158,14 +188,14 @@ impl ContextManager {
         // Track selection changes and manage context generation
         let current_name = windows.get(selected).map(|w| w.name.clone());
         if current_name != self.prev_selected_name {
-            // Refresh context for old session — only if it had activity (not Fresh)
+            // Refresh context for old session — only if it's in a settled state
             if let Some(ref prev_name) = self.prev_selected_name {
                 if let Some(prev_win) = windows.iter().find(|w| w.name == *prev_name) {
                     let state = states
                         .get(&prev_win.index)
                         .copied()
                         .unwrap_or(WindowState::Fresh);
-                    if state != WindowState::Fresh {
+                    if is_settled(state) {
                         let pane_id = pane_id_for(prev_win.index).unwrap_or_default();
                         let cwd =
                             cwd_for(prev_win.index).unwrap_or_else(|| prev_win.pane_path.clone());
@@ -216,6 +246,16 @@ impl ContextManager {
             let _ = tx.send((name, result));
         });
     }
+}
+
+/// A settled state means Claude has finished a turn and the conversation has content
+/// worth summarizing. Only generate context in these states — not during Working
+/// (conversation incomplete) or Fresh/Done (no activity / session ended).
+fn is_settled(state: WindowState) -> bool {
+    matches!(
+        state,
+        WindowState::Idle | WindowState::Asking | WindowState::Waiting
+    )
 }
 
 // ── Session Lookup ──
@@ -769,6 +809,210 @@ mod tests {
             mgr.get("active-session"),
             Some("generated context"),
             "context should be populated after drain"
+        );
+    }
+
+    // ── Scenario 5: Working state should NOT fire context generation ──
+    //
+    // During Working state, the conversation is incomplete — Claude hasn't
+    // responded yet. Firing the generator here risks failure (session file not
+    // ready) which triggers a 30s retry cooldown, blocking context generation
+    // when the session eventually reaches Idle.
+    #[test]
+    fn test_working_state_does_not_fire_context() {
+        let (generator, calls) = mock_generator();
+        let mut mgr = ContextManager::with_generator(generator);
+
+        let windows = vec![win(1, "session-1")];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Working)].into_iter().collect();
+        let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
+
+        // Tick with Working state selected
+        mgr.tick(&windows, &states, 0, &pane_ids(&panes), &no_cwd);
+
+        // Generator should NOT fire during Working
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "should not fire context during Working"
+        );
+        assert!(!mgr.is_loading("session-1"));
+        assert!(mgr.get("session-1").is_none());
+    }
+
+    // ── Scenario 6: Full user flow — Fresh → Working → Idle ──
+    //
+    // Simulates the exact user experience:
+    // 1. Session starts (Fresh) → no context
+    // 2. User asks a question (Working) → no context fires
+    // 3. Claude responds (Idle) → context fires and resolves
+    #[test]
+    fn test_full_user_flow_fresh_working_idle() {
+        let (generator, calls) = mock_generator();
+        let mut mgr = ContextManager::with_generator(generator);
+
+        let windows = vec![win(1, "my-session")];
+        let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
+
+        // Phase 1: Fresh — no context activity
+        let states_fresh: HashMap<u32, WindowState> =
+            [(1, WindowState::Fresh)].into_iter().collect();
+        mgr.tick(&windows, &states_fresh, 0, &pane_ids(&panes), &no_cwd);
+        assert!(calls.lock().unwrap().is_empty(), "Fresh: no generator call");
+        assert!(mgr.get("my-session").is_none(), "Fresh: no context");
+        assert!(!mgr.is_loading("my-session"), "Fresh: not loading");
+
+        // Phase 2: Working — still no context activity
+        let states_working: HashMap<u32, WindowState> =
+            [(1, WindowState::Working)].into_iter().collect();
+        mgr.tick(&windows, &states_working, 0, &pane_ids(&panes), &no_cwd);
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "Working: no generator call"
+        );
+        assert!(mgr.get("my-session").is_none(), "Working: no context");
+        assert!(!mgr.is_loading("my-session"), "Working: not loading");
+
+        // Phase 3: Idle — context fires
+        let states_idle: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+
+        // spawn() sets in_flight synchronously before the thread runs
+        assert!(
+            mgr.is_loading("my-session"),
+            "Idle: loading while in-flight"
+        );
+
+        // Let background thread complete and drain results
+        drain_with_wait(&mut mgr);
+
+        // Generator should have been called (check after drain — calls is populated in thread)
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "Idle: generator called once"
+        );
+
+        // Context should now be available
+        assert!(
+            !mgr.is_loading("my-session"),
+            "Idle: not loading after drain"
+        );
+        assert_eq!(
+            mgr.get("my-session"),
+            Some("context for %0"),
+            "Idle: context populated"
+        );
+    }
+
+    // ── Scenario 7: State transition invalidates stale cache ──
+    //
+    // After context is cached for a session, a new Working → Idle transition
+    // should invalidate the cache so fresh context is generated.
+    #[test]
+    fn test_working_to_idle_invalidates_cache() {
+        let (generator, calls) = mock_generator();
+        let mut mgr = ContextManager::with_generator(generator);
+
+        let windows = vec![win(1, "my-session")];
+        let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
+
+        // First round: Idle → generates and caches context
+        let states_idle: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+        drain_with_wait(&mut mgr);
+        assert_eq!(mgr.get("my-session"), Some("context for %0"));
+        assert_eq!(calls.lock().unwrap().len(), 1);
+
+        // Second round: user asks another question → Working
+        let states_working: HashMap<u32, WindowState> =
+            [(1, WindowState::Working)].into_iter().collect();
+        mgr.tick(&windows, &states_working, 0, &pane_ids(&panes), &no_cwd);
+        // Context still cached from first round (not cleared during Working)
+        assert_eq!(mgr.get("my-session"), Some("context for %0"));
+
+        // Third round: Claude responds → Idle again
+        // The Working → Idle transition should invalidate the cache
+        calls.lock().unwrap().clear();
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+
+        // spawn() is synchronous — should be in-flight (cache was cleared by transition)
+        assert!(
+            mgr.is_loading("my-session"),
+            "should re-request after Working → Idle transition"
+        );
+
+        drain_with_wait(&mut mgr);
+
+        // Generator should have been called again
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            1,
+            "should have called generator after Working → Idle transition"
+        );
+        assert_eq!(
+            mgr.get("my-session"),
+            Some("context for %0"),
+            "fresh context should be available"
+        );
+    }
+
+    // ── Scenario 8: Failed generator during Idle retries correctly ──
+    //
+    // Verifies the 30s cooldown behavior: if the generator fails during Idle,
+    // the retry cooldown prevents immediate re-requests (as expected).
+    // But a state transition (Working → Idle) should clear the cooldown.
+    #[test]
+    fn test_failed_generator_cooldown_cleared_on_transition() {
+        let call_count = Arc::new(Mutex::new(0u32));
+        let call_count_clone = Arc::clone(&call_count);
+        // Generator fails on first call, succeeds on second
+        let generator = move |_cwd: &str, _pane_id: &str| -> Option<String> {
+            let mut count = call_count_clone.lock().unwrap();
+            *count += 1;
+            if *count == 1 {
+                None // fail first time
+            } else {
+                Some("generated context".to_string())
+            }
+        };
+        let mut mgr = ContextManager::with_generator(generator);
+
+        let windows = vec![win(1, "my-session")];
+        let panes: HashMap<u32, String> = [(1, "%0".into())].into_iter().collect();
+
+        // Tick 1: Idle → generator fires and fails → enters 30s cooldown
+        let states_idle: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+        drain_with_wait(&mut mgr);
+        assert!(mgr.get("my-session").is_none(), "first attempt should fail");
+        assert_eq!(*call_count.lock().unwrap(), 1);
+
+        // Tick 2: Still Idle → cooldown blocks retry
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+        drain_with_wait(&mut mgr);
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            1,
+            "cooldown should block retry"
+        );
+
+        // Simulate new activity: Working → Idle transition clears cooldown
+        let states_working: HashMap<u32, WindowState> =
+            [(1, WindowState::Working)].into_iter().collect();
+        mgr.tick(&windows, &states_working, 0, &pane_ids(&panes), &no_cwd);
+        mgr.tick(&windows, &states_idle, 0, &pane_ids(&panes), &no_cwd);
+        drain_with_wait(&mut mgr);
+
+        // Should have retried and succeeded
+        assert_eq!(
+            *call_count.lock().unwrap(),
+            2,
+            "should retry after state transition"
+        );
+        assert_eq!(
+            mgr.get("my-session"),
+            Some("generated context"),
+            "second attempt should succeed"
         );
     }
 }
