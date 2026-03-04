@@ -6,7 +6,8 @@
 // Results flow back via mpsc channel so the sidebar event loop never blocks.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -26,8 +27,8 @@ pub struct ContextManager {
     contexts: HashMap<String, String>,
     in_flight: HashSet<String>,
     failed: HashMap<String, Instant>,
-    tx: mpsc::Sender<(String, String)>,
-    rx: mpsc::Receiver<(String, String)>,
+    tx: mpsc::Sender<(String, Result<String, String>)>,
+    rx: mpsc::Receiver<(String, Result<String, String>)>,
     generator: GeneratorFn,
     prev_selected_name: Option<String>,
 }
@@ -47,6 +48,20 @@ const MESSAGE_TRUNCATE: usize = 300;
 
 const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
+
+// ── Diagnostic Logging ──
+
+fn log_context(msg: &str) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = PathBuf::from(home).join(".cove").join("context.log");
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let _ = writeln!(f, "[{ts}] {msg}");
+    }
+}
 
 // ── Public API ──
 
@@ -87,12 +102,16 @@ impl ContextManager {
 
     /// Drain completed context results from background threads.
     pub fn drain(&mut self) {
-        while let Ok((name, context)) = self.rx.try_recv() {
+        while let Ok((name, result)) = self.rx.try_recv() {
             self.in_flight.remove(&name);
-            if context.is_empty() {
-                self.failed.insert(name, Instant::now());
-            } else {
-                self.contexts.insert(name, context);
+            match result {
+                Ok(context) => {
+                    self.contexts.insert(name, context);
+                }
+                Err(reason) => {
+                    log_context(&format!("failed for {name}: {reason}"));
+                    self.failed.insert(name, Instant::now());
+                }
             }
         }
     }
@@ -202,8 +221,11 @@ impl ContextManager {
         let pane_id = pane_id.to_string();
         let generator = Arc::clone(&self.generator);
         thread::spawn(move || {
-            let context = generator(&cwd, &pane_id).unwrap_or_default();
-            let _ = tx.send((name, context));
+            let result = match generator(&cwd, &pane_id) {
+                Some(ctx) => Ok(ctx),
+                None => Err("generator returned None".to_string()),
+            };
+            let _ = tx.send((name, result));
         });
     }
 }
@@ -222,10 +244,21 @@ fn claude_project_dir(cwd: &str) -> PathBuf {
 
 /// Find the Claude session JSONL file for a given pane.
 fn find_session_file(cwd: &str, pane_id: &str) -> Option<PathBuf> {
-    let session_id = events::find_session_id(pane_id)?;
+    let session_id = match events::find_session_id(pane_id) {
+        Some(id) => id,
+        None => {
+            log_context(&format!("no session_id for pane_id={pane_id}"));
+            return None;
+        }
+    };
     let project_dir = claude_project_dir(cwd);
     let path = project_dir.join(format!("{session_id}.jsonl"));
-    if path.exists() { Some(path) } else { None }
+    if path.exists() {
+        Some(path)
+    } else {
+        log_context(&format!("JSONL not found: {}", path.display()));
+        None
+    }
 }
 
 // ── JSONL Parsing ──
@@ -234,7 +267,13 @@ fn find_session_file(cwd: &str, pane_id: &str) -> Option<PathBuf> {
 /// Returns a compact representation of user/assistant messages, truncated
 /// to fit within CONVERSATION_BUDGET.
 fn extract_conversation(path: &Path) -> Option<String> {
-    let content = fs::read_to_string(path).ok()?;
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            log_context(&format!("read session file failed: {}: {e}", path.display()));
+            return None;
+        }
+    };
     let mut messages = Vec::new();
 
     for line in content.lines() {
@@ -311,22 +350,43 @@ fn extract_conversation(path: &Path) -> Option<String> {
 // ── Context Generation ──
 
 fn generate_context(cwd: &str, pane_id: &str) -> Option<String> {
-    let session_path = find_session_file(cwd, pane_id)?;
-    let conversation = extract_conversation(&session_path)?;
+    let session_path = match find_session_file(cwd, pane_id) {
+        Some(p) => p,
+        None => {
+            log_context(&format!("no session file: cwd={cwd} pane_id={pane_id}"));
+            return None;
+        }
+    };
+    let conversation = match extract_conversation(&session_path) {
+        Some(c) => c,
+        None => {
+            log_context(&format!(
+                "no conversation: path={}",
+                session_path.display()
+            ));
+            return None;
+        }
+    };
 
     let prompt = format!("{SUMMARY_PROMPT}\n\nConversation:\n{conversation}");
 
     // Fresh claude -p call — no -c, no session resume, no large context reload.
     // Must clear CLAUDECODE env var to avoid "nested session" detection,
     // since the sidebar itself runs inside a Claude Code session.
-    let mut child = Command::new("claude")
+    let mut child = match Command::new("claude")
         .args(["-p", &prompt, "--max-turns", "1", "--model", "haiku"])
         .current_dir(cwd)
         .env_remove("CLAUDECODE")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log_context(&format!("claude spawn failed: {e}"));
+            return None;
+        }
+    };
 
     let deadline = Instant::now() + SUBPROCESS_TIMEOUT;
     let status = loop {
@@ -336,23 +396,36 @@ fn generate_context(cwd: &str, pane_id: &str) -> Option<String> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    log_context("claude timed out after 30s");
                     return None;
                 }
                 thread::sleep(Duration::from_millis(200));
             }
-            Err(_) => return None,
+            Err(e) => {
+                log_context(&format!("claude try_wait failed: {e}"));
+                return None;
+            }
         }
     };
 
     if !status.success() {
+        log_context(&format!("claude exited {}", status));
         return None;
     }
 
     let mut stdout = child.stdout.take()?;
     let mut text = String::new();
-    io::Read::read_to_string(&mut stdout, &mut text).ok()?;
+    if let Err(e) = io::Read::read_to_string(&mut stdout, &mut text) {
+        log_context(&format!("read claude stdout failed: {e}"));
+        return None;
+    }
     let text = text.trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        log_context("claude returned empty output");
+        None
+    } else {
+        Some(text)
+    }
 }
 
 // ── Tests ──
