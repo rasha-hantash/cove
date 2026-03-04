@@ -128,8 +128,8 @@ impl ContextManager {
 
     /// Run one tick of context orchestration.
     ///
-    /// - Prefetches context for all non-Fresh sessions
     /// - Drains completed results from background threads
+    /// - Requests context for the selected window (lazy — only when viewed)
     /// - On selection change: refreshes old session (if active), requests new session (if active)
     pub fn tick(
         &mut self,
@@ -139,8 +139,11 @@ impl ContextManager {
         pane_id_for: &impl Fn(u32) -> Option<String>,
         cwd_for: &impl Fn(u32) -> Option<String>,
     ) {
-        // Prefetch context for all non-fresh sessions
-        for win in windows {
+        // Drain completed context results first so they're available this tick
+        self.drain();
+
+        // Request context for the selected window only (lazy generation)
+        if let Some(win) = windows.get(selected) {
             let state = states
                 .get(&win.index)
                 .copied()
@@ -151,9 +154,6 @@ impl ContextManager {
                 self.request(&win.name, &cwd, &pane_id);
             }
         }
-
-        // Drain completed context results from background threads
-        self.drain();
 
         // Track selection changes and manage context generation
         let current_name = windows.get(selected).map(|w| w.name.clone());
@@ -171,18 +171,6 @@ impl ContextManager {
                             .unwrap_or_else(|| prev_win.pane_path.clone());
                         self.refresh(&prev_win.name, &cwd, &pane_id);
                     }
-                }
-            }
-            // Request context for new session — only if it had activity (not Fresh)
-            if let Some(win) = windows.get(selected) {
-                let state = states
-                    .get(&win.index)
-                    .copied()
-                    .unwrap_or(WindowState::Fresh);
-                if state != WindowState::Fresh {
-                    let pane_id = pane_id_for(win.index).unwrap_or_default();
-                    let cwd = cwd_for(win.index).unwrap_or_else(|| win.pane_path.clone());
-                    self.request(&win.name, &cwd, &pane_id);
                 }
             }
             self.prev_selected_name = current_name;
