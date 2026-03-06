@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::{self, stdout};
+use std::time::Instant;
 
 use crossterm::cursor;
 use crossterm::execute;
@@ -25,10 +26,6 @@ struct SidebarApp {
     detector: StateDetector,
     context_mgr: ContextManager,
 }
-
-// ── Constants ──
-
-const REFRESH_EVERY: u64 = 2;
 
 // ── Public API ──
 
@@ -62,61 +59,72 @@ fn run_loop() -> Result<(), String> {
         context_mgr: ContextManager::new(),
     };
 
+    let mut last_refresh = Instant::now();
+    let refresh_interval = std::time::Duration::from_secs(2);
+    let mut needs_render = true;
+
     loop {
-        // Refresh window list periodically
-        if app.tick % REFRESH_EVERY == 0 {
+        // Refresh window list periodically (every 2s wall-clock, not every N ticks)
+        if last_refresh.elapsed() >= refresh_interval {
             refresh_windows(&mut app);
+            last_refresh = Instant::now();
+            needs_render = true;
         }
 
-        // Detect states every tick
-        app.states = app.detector.detect(&app.windows);
+        // Only do expensive work (state detection, context, render) when needed
+        if needs_render {
+            // Detect states
+            app.states = app.detector.detect(&app.windows);
 
-        // Context orchestration: prefetch, drain, handle selection changes
-        let detector = &app.detector;
-        app.context_mgr.tick(
-            &app.windows,
-            &app.states,
-            app.selected,
-            &|idx| detector.pane_id(idx).map(str::to_string),
-            &|idx| detector.cwd(idx).map(str::to_string),
-        );
+            // Context orchestration: prefetch, drain, handle selection changes
+            let detector = &app.detector;
+            app.context_mgr.tick(
+                &app.windows,
+                &app.states,
+                app.selected,
+                &|idx| detector.pane_id(idx).map(str::to_string),
+                &|idx| detector.cwd(idx).map(str::to_string),
+            );
 
-        // Prepare context for rendering
-        let context = app
-            .windows
-            .get(app.selected)
-            .and_then(|win| app.context_mgr.get(&win.name));
-        let context_loading = app
-            .windows
-            .get(app.selected)
-            .is_some_and(|win| app.context_mgr.is_loading(&win.name));
-        let context_error = app
-            .windows
-            .get(app.selected)
-            .and_then(|win| app.context_mgr.get_error(&win.name));
+            // Prepare context for rendering
+            let context = app
+                .windows
+                .get(app.selected)
+                .and_then(|win| app.context_mgr.get(&win.name));
+            let context_loading = app
+                .windows
+                .get(app.selected)
+                .is_some_and(|win| app.context_mgr.is_loading(&win.name));
+            let context_error = app
+                .windows
+                .get(app.selected)
+                .and_then(|win| app.context_mgr.get_error(&win.name));
 
-        // Render
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                let widget = SidebarWidget {
-                    windows: &app.windows,
-                    states: &app.states,
-                    selected: app.selected,
-                    tick: app.tick,
-                    context,
-                    context_loading,
-                    context_error,
-                };
-                frame.render_widget(widget, area);
-            })
-            .map_err(|e| format!("render: {e}"))?;
+            // Render
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    let widget = SidebarWidget {
+                        windows: &app.windows,
+                        states: &app.states,
+                        selected: app.selected,
+                        tick: app.tick,
+                        context,
+                        context_loading,
+                        context_error,
+                    };
+                    frame.render_widget(widget, area);
+                })
+                .map_err(|e| format!("render: {e}"))?;
 
-        // Handle events
+            needs_render = false;
+        }
+
+        // Block for input (500ms timeout when idle — ~2 wakeups/sec instead of 10)
         let actions = event::poll();
         let mut moved = false;
 
-        for action in actions {
+        for action in &actions {
             match action {
                 Action::Up => {
                     if app.selected > 0 {
@@ -134,7 +142,9 @@ fn run_loop() -> Result<(), String> {
                     if let Some(win) = app.windows.get(app.selected) {
                         let _ = tmux::select_window(win.index);
                         refresh_windows(&mut app);
+                        last_refresh = Instant::now();
                         app.tick = 0;
+                        needs_render = true;
                         continue;
                     }
                 }
@@ -148,10 +158,14 @@ fn run_loop() -> Result<(), String> {
             if let Some(win) = app.windows.get(app.selected) {
                 let _ = tmux::select_window_sidebar(win.index);
             }
-            // Skip next refresh so select-window has time to take effect
             app.tick = 1;
+            needs_render = true;
         } else {
             app.tick += 1;
+            // Trigger periodic render for context loading spinners
+            if app.tick % 4 == 0 {
+                needs_render = true;
+            }
         }
     }
 }

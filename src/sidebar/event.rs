@@ -16,12 +16,13 @@ pub enum Action {
 
 // ── Public API ──
 
-/// Poll for input events with a 100ms timeout. Returns accumulated actions.
+/// Poll for input events with a 500ms timeout. Returns accumulated actions.
 /// Batches rapid arrow presses into single moves (key draining).
+/// The 500ms timeout means ~2 wakeups/sec when idle (vs 10 at 100ms).
 pub fn poll() -> Vec<Action> {
     let mut actions = Vec::new();
 
-    if event::poll(Duration::from_millis(100)).unwrap_or(false) {
+    if event::poll(Duration::from_millis(500)).unwrap_or(false) {
         // Process first event
         if let Ok(Event::Key(key)) = event::read()
             && let Some(action) = key_to_action(key)
