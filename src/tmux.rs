@@ -350,6 +350,30 @@ pub fn rename_window(pane_id: &str, new_name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Send keys to the Claude pane (.1) of a window.
+pub fn send_keys(window_name: &str, keys: &[&str]) -> Result<(), String> {
+    let target = format!("{SESSION}:{window_name}.1");
+    let mut args = vec!["send-keys", "-t", &target];
+    args.extend_from_slice(keys);
+    tmux_stdout(&args)?;
+    Ok(())
+}
+
+/// Get the foreground command running in the Claude pane (.1).
+pub fn pane_command(window_name: &str) -> Result<String, String> {
+    let target = format!("{SESSION}:{window_name}.1");
+    let out = tmux_stdout(&["display-message", "-t", &target, "-p", "#{pane_current_command}"])?;
+    Ok(out.trim().to_string())
+}
+
+/// Remove the pane-died hook so Claude isn't respawned after exit.
+pub fn disable_respawn(window_name: &str) -> Result<(), String> {
+    let target = format!("{SESSION}:{window_name}");
+    let _ = tmux_stdout(&["set-hook", "-u", "-w", "-t", &target, "pane-died"]);
+    let _ = tmux_stdout(&["set-option", "-w", "-t", &target, "remain-on-exit", "off"]);
+    Ok(())
+}
+
 pub fn select_window_sidebar(index: u32) -> Result<(), String> {
     let target = format!("{SESSION}:{index}");
     let status = Command::new("tmux")

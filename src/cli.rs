@@ -23,9 +23,16 @@ pub enum Command {
     Kill {
         /// Session name to kill
         name: String,
+        /// Skip graceful shutdown (instant kill, no /exit)
+        #[arg(long, short)]
+        force: bool,
     },
     /// Kill all sessions
-    AllKill,
+    AllKill {
+        /// Skip graceful shutdown (instant kill, no /exit)
+        #[arg(long, short)]
+        force: bool,
+    },
     /// Reattach to existing session
     Resume,
     /// Interactive session navigator (launched by start)
