@@ -1,3 +1,5 @@
+use std::io::{self, BufRead};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -52,6 +54,46 @@ fn graceful_exit(window_name: &str) -> bool {
     false
 }
 
+/// Run the brain-os capture script for a window, returning the Claude session_id if captured.
+fn run_capture(window_name: &str) -> Option<String> {
+    let pane_id = tmux::get_claude_pane_id(window_name).ok()?;
+    let session_id = events::find_session_id(&pane_id)?;
+    let cwd = tmux::list_windows()
+        .ok()
+        .and_then(|wins| {
+            wins.into_iter()
+                .find(|w| w.name == window_name)
+                .map(|w| w.pane_path)
+        })
+        .unwrap_or_default();
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let capture_script = std::path::PathBuf::from(home).join(".claude/hooks/brain-os-capture.py");
+
+    if !capture_script.exists() {
+        return None;
+    }
+
+    let status = Command::new("python3")
+        .arg(&capture_script)
+        .arg("--session-id")
+        .arg(&session_id)
+        .arg("--cwd")
+        .arg(&cwd)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            // Write marker to prevent SessionEnd hook from double-capturing
+            let _ = std::fs::write(format!("/tmp/cove-captured-{session_id}"), "");
+            Some(session_id)
+        }
+        _ => None,
+    }
+}
+
 pub fn run(name: &str, force: bool) -> Result<(), String> {
     if !tmux::has_session() {
         println!("{ANSI_OVERLAY}No active cove session.{ANSI_RESET}");
@@ -59,7 +101,13 @@ pub fn run(name: &str, force: bool) -> Result<(), String> {
     }
 
     write_end_event(name);
+
     if !force {
+        run_capture(name);
+
+        println!("Press Enter to close {ANSI_PEACH}{name}{ANSI_RESET}, or Ctrl-C to cancel.");
+        let _ = io::stdin().lock().read_line(&mut String::new());
+
         println!("Shutting down {ANSI_PEACH}{name}{ANSI_RESET} gracefully...");
         graceful_exit(name);
     }
@@ -80,6 +128,17 @@ pub fn run_all(force: bool) -> Result<(), String> {
     }
 
     if !force {
+        // Capture learnings from all sessions before exiting
+        for win in &windows {
+            run_capture(&win.name);
+        }
+
+        println!(
+            "\nPress Enter to close {} session(s), or Ctrl-C to cancel.",
+            windows.len()
+        );
+        let _ = io::stdin().lock().read_line(&mut String::new());
+
         println!("Shutting down {} session(s) gracefully...", windows.len());
         for win in &windows {
             let exited = graceful_exit(&win.name);
