@@ -1,8 +1,9 @@
 use clap::Parser;
 use cove_cli::cli::{Cli, Command};
-use cove_cli::{commands, naming, sidebar, tmux};
+use cove_cli::{commands, naming, paths, sidebar, tmux};
 
 fn main() {
+    paths::migrate_legacy();
     let cli = Cli::parse();
 
     let result = match cli.command {

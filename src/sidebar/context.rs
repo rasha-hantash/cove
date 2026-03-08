@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::events;
+use crate::paths;
 use crate::sidebar::state::WindowState;
 use crate::tmux::WindowInfo;
 
@@ -54,8 +55,7 @@ const RETRY_COOLDOWN: Duration = Duration::from_secs(30);
 // ── Diagnostic Logging ──
 
 fn log_context(msg: &str) {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let path = PathBuf::from(home).join(".cove").join("context.log");
+    let path = paths::state_dir().join("context.log");
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

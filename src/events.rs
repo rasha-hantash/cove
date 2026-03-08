@@ -7,10 +7,11 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Path to the Cove events directory (~/.cove/events/).
+use crate::paths;
+
+/// Path to the Cove events directory (XDG_STATE_HOME/cove/events/).
 pub fn events_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    PathBuf::from(home).join(".cove").join("events")
+    paths::events_dir()
 }
 
 /// Append a state event to the session's event file.
