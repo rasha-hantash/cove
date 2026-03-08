@@ -583,7 +583,17 @@ No new `capture.rs` module needed — just a subprocess call.
 
 - [x] Deprecate claude-learnings in brain-os CLAUDE.md (PR #32)
 - [x] Update ~/.claude/CLAUDE.md capture triggers (dotfiles PR #63)
-- [ ] Phase 1: Capture script + citation convention + cove integration
+- [x] Phase 1: Capture script + citation convention + cove integration (2026-03-07)
+  - [x] `brain-os-capture.py` — single-prompt extraction with citations (dotfiles PR #64)
+  - [x] Wire as SessionEnd hook, replacing `capture-learnings.py` (dotfiles PR #64)
+  - [x] `brain-os-context.py` — strip footnotes from injected context (dotfiles PR #64)
+  - [x] `pre-compact.py` — remove ACTION REQUIRED section (dotfiles PR #64)
+  - [x] `/capture` skill — inline mid-session capture (dotfiles PR #64)
+  - [x] `/doctor` V1 skill — uncited sections + orphaned citations (dotfiles PR #64)
+  - [x] `cove kill` capture integration + user confirmation (cove PR #46)
+  - [x] Version bump 0.6.0 (cove PR #47)
+  - [x] brain-os CLAUDE.md citation format spec (brain-os PR #33)
+  - [x] brain-os .gitignore for transcripts (brain-os PR #33)
 - [ ] Phase 2: GitHub transcript archive
 - [ ] Phase 3: `/doctor` enhancements
 - [ ] Phase 4: CI check + brain-os frontend
