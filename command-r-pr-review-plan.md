@@ -24,15 +24,18 @@ The pre-push review lets you catch issues yourself before spending money on mesa
 
 ```
 You push via gt submit
-  → Claude triggers mesa.dev review (manual trigger, not automatic)
-  → TUI shows polling indicator: "Waiting for mesa.dev..."
-  → Comments arrive → Claude analyzes each one (Phase 2)
-  → C-a r
-  → Bottom-right tab switches to Mesa Analysis (scrollable comments + recommendations)
-  → Bottom-right feedback input → type your response
-  → Enter → feedback submitted, input freezes
-  → q → back to Claude, it's addressing your feedback
+  → pr-monitor agent (background) polls for mesa.dev comments
+  → Comments arrive → pr-monitor reads them, fixes code locally
+  → C-a r → Review TUI shows diff with mesa comments inline
+  → Mesa comments show as: resolved (green, dimmed) or skipped (orange)
+  → Resolved comments show what Claude fixed and how
+  → Press 'a' on a skipped comment to queue it for Claude to address
+  → Press 'A' to queue all remaining skipped comments
+  → S (submit) → queued mesa comments + your inline comments piped to Claude
+  → TUI auto-closes → "✓ Submitting to Claude" flash → back to Claude
 ```
+
+The pr-monitor agent (see `~/.claude/agents/pr-monitor.md`) already auto-fixes mesa.dev comments. The review TUI shows the results — you decide what else to address.
 
 ---
 
@@ -44,167 +47,178 @@ You push via gt submit
 ┌─────────────────────────────────────────────┬──────────────────┐
 │                                             │                  │
 │              REVIEW TUI (C-a r)             │   Cove Sidebar   │
-│           replaces Claude pane              │   (sessions)     │
-│               see below                     │                  │
+│           replaces Claude pane              │   (sessions +    │
+│               see below                     │    branches)     │
 │                                             ├──────────────────┤
 │                                             │                  │
-│                                             │   Terminal       │
-│                                             │   (mini shell)   │
+│                                             │   Files Changed  │
+│                                             │   (replaces      │
+│                                             │    terminal)     │
 │                                             │                  │
 └─────────────────────────────────────────────┴──────────────────┘
   70% width                                     30% width
 ```
 
+When the review TUI is active, the bottom-right pane switches from the terminal to the files changed list. The terminal is not visible during review mode.
+
 ### Phase 1 layout
 
-The Phase 1 UI adapts based on context. Before a PR exists (pre-push), you see diffs and your own inline comments. After a PR is pushed and mesa.dev comments exist (post-push), those comments also appear inline on the diff.
+The Phase 1 UI adapts based on context. Before a PR exists (pre-push), you see diffs and your own inline comments. After a PR is pushed and mesa.dev comments exist (post-push), those comments also appear inline on the diff with their resolution state.
 
 **Pre-push state** (no PR yet — reviewing your own code):
 
 ```
-┌──────────────────────────────────────┬──────────────────────────┐
-│                                      │  BRANCH / STACK NAV      │
-│         DIFF VIEWER                  │                          │
-│                                      │  ▸ feat/auth             │
-│  src/lib.rs                          │    ├ add-model       ✓   │
-│  ─────────────────────────           │    ├ add-api         ●←  │
-│  42  │ -  fn process() {             │    └ add-ui          ○   │
-│  42  │ +  fn process() -> Result {   │                          │
-│  43  │ +      let data = fetch()?;   │  ▸ feat/dashboard        │
-│  44  │    }                          │    ├ add-route       ●   │
-│      │                               │    └ add-widgets     ○   │
-│      │  ┌─ you ───────────────────┐  │                          │
-│      │  │ "Use anyhow here"       │  │    fix/login-bug   [wt] │
-│      │  └─────────────────────────┘  │                          │
-│      │                               ├──────────────────────────┤
-│  src/api.rs                          │  FILES CHANGED (3)       │
-│  ─────────────────────────           │                          │
-│  15  │ +  pub fn new_endpoint() {    │  ▸ src/lib.rs       +15 │
-│  16  │ +      todo!()                │    src/api.rs         +8 │
-│      │                               │    src/types.rs       +3 │
-└──────────────────────────────────────┴──────────────────────────┘
- [c]omment  [j/k] scroll  [Tab] panel  [S]ubmit  [q]uit
+┌──────────────────────────────────────────┬───────────────────────┐
+│                                          │  SESSIONS              │
+│  src/lib.rs                              │  2 sessions · ↑↓ nav  │
+│  ──────────────────────────────          │                        │
+│  40  │    fn main() {                    │  ▸ cove                │
+│  41  │        let config = load();       │    main                │
+│▐ 42  │ -  fn process() {                │    add-review-tui  ●←  │
+│  42  │ +  fn process() -> Result {       │    fix-cpu        [wt] │
+│  43  │ +      let data = fetch()?;       │                        │
+│  44  │    }                              │    pancake              │
+│  45  │                                   │    main           idle │
+│      │                                   │                        │
+│      │  ┌─ you ─────────────────────┐    ├───────────────────────┤
+│      │  │ Use anyhow here instead   │    │  FILES CHANGED (3)    │
+│      │  │ of std Result             │    │                        │
+│      │  └───────────────────────────┘    │  ▸ src/lib.rs    +15-3│
+│      │                                   │    src/api.rs     +8  │
+│  src/api.rs                              │    src/types.rs   +3-1│
+│  ──────────────────────────────          │                        │
+│  15  │ +  pub fn new_endpoint() {        │                        │
+│  16  │ +      todo!()                    │                        │
+│      │                                   │                        │
+└──────────────────────────────────────────┴───────────────────────┘
+ c comment  j/k scroll  S submit  q quit         1/3 files · line 42
 ```
 
-**Post-push state** (PR exists — mesa.dev comments appear inline):
+Key visual elements:
+
+- **Lavender left-border** (`▐`) marks the cursor position (line 42)
+- **Inline comments** (`you` tag) appear as blue-bordered blocks below the target line
+- **Multi-line comments** supported: `Enter` = newline, `Ctrl+S` = submit comment, `Esc` = cancel
+- **Sessions panel** replaces "branch header" — shows session names with branch trees underneath
+- **Files panel** replaces terminal during review mode
+- **Status bar** shows position indicator (`1/3 files · line 42`)
+
+**Post-push state** (PR exists — mesa.dev comments appear inline with resolution state):
 
 ```
-┌──────────────────────────────────────┬──────────────────────────┐
-│                                      │  BRANCH / STACK NAV      │
-│         DIFF VIEWER                  │                          │
-│                                      │  ▸ feat/auth      PR #14 │
-│  src/lib.rs                          │    ├ add-model       ✓   │
-│  ─────────────────────────           │    ├ add-api         ●←  │
-│  42  │ -  fn process() {             │    └ add-ui          ○   │
-│  42  │ +  fn process() -> Result {   │                          │
-│  43  │ +      let data = fetch()?;   │  ▸ feat/dashboard PR #15 │
-│  44  │    }                          │    ├ add-route       ●   │
-│      │                               │    └ add-widgets     ○   │
-│      │  ┌─ mesa [high] ───────────┐  │                          │
-│      │  │ "No error handling for  │  │    fix/login-bug   [wt] │
-│      │  │  the fetch() call"      │  │                          │
-│      │  └─────────────────────────┘  ├──────────────────────────┤
-│      │                               │  FILES CHANGED (3)       │
-│      │  ┌─ you ───────────────────┐  │                          │
-│      │  │ "Use anyhow here"       │  │  ▸ src/lib.rs       +15 │
-│      │  └─────────────────────────┘  │    src/api.rs         +8 │
-│      │                               │    src/types.rs       +3 │
-│  src/api.rs                          │                          │
-│  ─────────────────────────           │                          │
-│  15  │ +  pub fn new_endpoint() {    │                          │
-│  16  │ +      todo!()                │                          │
-│      │                               │                          │
-└──────────────────────────────────────┴──────────────────────────┘
- [c]omment  [j/k] scroll  [Tab] panel  [S]ubmit  [q]uit
+┌──────────────────────────────────────────┬───────────────────────┐
+│                                          │  SESSIONS              │
+│  src/lib.rs                              │  2 sessions · ↑↓ nav  │
+│  ──────────────────────────────          │                        │
+│  40  │    fn main() {                    │  ▸ cove                │
+│  41  │        let config = load();       │    main                │
+│▐ 42  │ -  fn process() {                │    add-review-tui  ●←  │
+│  42  │ +  fn process() -> Result {       │    fix-cpu        [wt] │
+│  43  │ +      let data = fetch()?;       │                        │
+│  44  │    }                              │    pancake              │
+│      │                                   │    main           idle │
+│      │  ┌─ mesa [high] ✓ resolved ──┐   │                        │
+│      │  │ "No error handling for     │   ├───────────────────────┤
+│      │  │  the fetch() call"         │   │  FILES CHANGED (3)    │
+│      │  │ Claude: wrapped in Result  │   │                        │
+│      │  │ with ? propagation         │   │  ▸ src/lib.rs    +15-3│
+│      │  └────────────────────────────┘   │    src/api.rs     +8  │
+│      │                                   │    src/types.rs   +3-1│
+│      │  ┌─ mesa [low] ⊘ skipped ────┐   │                        │
+│      │  │ "Add documentation for     │   │                        │
+│      │  │  this function"            │   │                        │
+│      │  │ press 'a' to address       │   │                        │
+│      │  └────────────────────────────┘   │                        │
+│      │                                   │                        │
+│      │  ┌─ you ─────────────────────┐    │                        │
+│      │  │ Use anyhow here instead   │    │                        │
+│      │  └───────────────────────────┘    │                        │
+│      │                                   │                        │
+└──────────────────────────────────────────┴───────────────────────┘
+ c comment  j/k scroll  a address  A all  S submit  q quit  1/3 · L42
 ```
 
-### Phase 2+ layout (bottom-right gains tabs)
+Mesa comment states (only two states — no "pending"):
+
+- **Resolved** (green, 0.75 opacity): Claude already fixed it. Shows the fix description. Dimmed to reduce visual noise.
+- **Skipped** (orange, full opacity): Claude chose not to fix. Shows reasoning. Press `a` to queue for Claude to address.
+
+### Comment input state
+
+When you press `c` on a diff line, an inline input block appears below that line:
 
 ```
-┌──────────────────────────────────────┬──────────────────────────┐
-│                                      │  BRANCH / STACK NAV      │
-│         DIFF VIEWER                  │                          │
-│                                      │  ▸ feat/auth      PR #14 │
-│  (same as Phase 1)                   │    ├ add-model       ✓   │
-│                                      │    ├ add-api         ●←  │
-│                                      │    └ add-ui          ○   │
-│                                      │                          │
-│                                      ├──────────────────────────┤
-│                                      │  [Files] [Mesa Analysis] │
-│                                      │                          │
-│                                      │  ┌─ 1. src/lib:42 ─────┐│
-│                                      │  │ [high] "No error    ││
-│                                      │  │ handling for fetch()"││
-│                                      │  │ claude: ADDRESS      ││
-│                                      │  │ "Valid — wrap in     ││
-│                                      │  │ Result with ?"       ││
-│                                      │  └──────────────────────┘│
-│                                      │                          │
-│                                      │  ┌─ 2. src/api:15 ─────┐│
-│                                      │  │ [low] "Add docs"    ││
-│                                      │  │ claude: REJECT       ││
-│                                      │  │ "Self-explanatory."  ││
-│                                      │  └──────────────────────┘│
-│                                      │                          │
-│                                      ├──────────────────────────┤
-│                                      │  YOUR FEEDBACK:          │
-│                                      │  ┌──────────────────────┐│
-│                                      │  │ Address 1, skip 2.  ││
-│                                      │  └──────────────────────┘│
-│                                      │  [Enter] submit          │
-└──────────────────────────────────────┴──────────────────────────┘
- [c]omment  [j/k] scroll  [Tab] file/mesa  [S]ubmit  [q]uit
+│  42  │ +  fn process() -> Result {       │
+│  43  │ +      let data = fetch()?;       │
+│      │                                   │
+│      │  ┌─ you ─────────────────────┐    │
+│      │  │ █                         │    │
+│      │  └───────────────────────────┘    │
+│      │                                   │
+└──────────────────────────────────────────┘
+ Ctrl+S submit · Esc cancel · Enter newline    COMMENT
 ```
 
-After submitting feedback, the input area freezes:
+- **Multi-line**: `Enter` inserts a newline (not submit). `Ctrl+S` submits the comment. `Esc` cancels.
+- **Mode indicator**: Status bar shows `COMMENT` badge while editing.
+- **Block cursor** (`█`) shows insertion point.
+- **Comment management**: `e` to edit an existing comment, `d` to delete, `j/k` to navigate between comments.
+
+### Submit flow
+
+Pressing `S` submits all inline comments + queued mesa comments:
 
 ```
-├──────────────────────────┤
-│  ✓ Feedback submitted    │
-│  [q] back to Claude      │
-└──────────────────────────┘
+┌──────────────────────────────────────────┐
+│                                          │
+│        ✓ Submitting to Claude            │
+│                                          │
+│        2 inline comments                 │
+│        1 mesa comment queued             │
+│                                          │
+└──────────────────────────────────────────┘
 ```
+
+The TUI auto-closes after the flash. Comments are piped to Claude via `tmux send-keys`. Claude is already processing by the time you see the Claude pane again.
+
+### Phase 3 layout (mesa analysis tab — future)
+
+In a future version, the bottom-right panel may gain a `[Mesa Analysis]` tab alongside `[Files]` for a dedicated scrollable view of all mesa comments with Claude's recommendations. For Phase 1, mesa comments are shown inline on the diff and that's sufficient.
 
 ### Key layout details
 
-- **Left (60%)**: Diff viewer — unified diff, file-by-file. Mesa.dev comments rendered inline under target lines with severity (low/medium/high). Your comments rendered as `you` tags. Scrollable.
-- **Top-right**: Branch/stack navigator. Shows Graphite stacks with entries, standalone branches, worktree indicators. Arrow keys + Enter to switch branches, diff viewer updates.
-- **Bottom-right (Phase 1)**: File list — changed files with line counts. Arrow keys or Tab to switch files, diff viewer jumps to that file.
-- **Bottom-right (Phase 2+)**: Tabbed panel — `[Files]` tab (same file list) and `[Mesa Analysis]` tab (scrollable mesa.dev comments with Claude's recommendations + fixed feedback input at bottom).
+- **Left (70%)**: Diff viewer — full width matching the Claude pane. Unified diff, file-by-file, scrollable. Whole file loaded (not just hunks). Mesa.dev comments rendered inline under target lines with severity + resolution state. Your comments rendered as `you` blocks with blue border.
+- **Top-right**: Sessions panel. Shows Cove session names with branch trees underneath each session. Worktree indicators `[wt]`. Current branch marked with `●←`. Navigate between sessions with `↑/↓`.
+- **Bottom-right**: Files changed list — changed files with +/- line counts. Selecting a file scrolls the diff viewer to that file. `▸` marker tracks currently viewed file.
+- **Status bar**: Keybind hints on left, position indicator on right (`1/3 files · line 42`).
+- **No terminal pane** during review mode — the files list replaces it.
 
-### Branch navigator details
+### Sessions panel details
 
-The top-right panel shows all branches and stacks:
+The top-right panel shows Cove sessions with their branch trees:
 
 ```
-  BRANCHES
+  SESSIONS
+  2 sessions · ↑↓ navigate
   ────────────────────────
-  repo: rasha-hantash/cove
 
-  Stacks (Graphite)
-  ▸ feat/auth                        PR #14
-    ├── 01-add-user-model        ✓   merged
-    ├── 02-add-auth-api          ●←  current (you are here)
-    └── 03-add-auth-ui           ○   pending review
+  ▸ cove
+    main
+    add-review-tui         ●←
+    fix-cpu                [wt]
 
-  ▸ feat/dashboard                   PR #15
-    ├── 01-add-dashboard-route   ●   in review
-    └── 02-add-widgets           ○   draft
-
-  Branches
-    fix/login-bug                [wt] worktree active
-    chore/cleanup                     standalone branch
-
-  ● current  ✓ merged  ○ pending
-  [wt] = running in a worktree
-  ← = your active branch
+    pancake
+    main                   idle
+    add-auth               ●
 ```
 
-- **Graphite stacks**: grouped, showing position in stack, PR number, entry status
-- **Standalone branches**: not part of any stack
-- **Worktree indicator**: `[wt]` means this branch has an active git worktree (another Claude session might be working on it)
-- **Current marker**: `←` shows which branch the active Claude session is on
-- **Navigation**: Arrow keys to highlight, Enter to switch — diff viewer updates to show that branch's changes
+- **Session names** (e.g., `cove`, `pancake`) are the Cove sessions — each corresponds to a repo the user has open
+- **Branch trees** underneath each session show all branches/worktrees for that repo
+- **Current marker**: `●←` shows which branch the active Claude session is on
+- **Worktree indicator**: `[wt]` means this branch has an active git worktree
+- **Session status**: shown when relevant (e.g., `idle`, `working`, `your turn`)
+- **Navigation**: `↑/↓` to navigate between sessions, `Enter` to expand/collapse branch tree
+- **Branch switching**: Select a branch and press `Enter` — preloads worktrees for fast switching. Loading indicator shown during `git checkout` + `git diff` if latency occurs. Ideally automatic (worktrees preloaded at TUI launch) but may need a loading state for first iteration.
 
 ### File list details
 
@@ -236,9 +250,8 @@ Selecting a file scrolls the diff viewer to that file. The `▸` marker tracks w
          │                       │                         │
          ▼                       ▼                         ▼
     pane → session          git diff              mesa.dev comments
-    detect cwd + branch     branch list           (raw, Phase 1)
-                            stack info            + AI analysis
-                                                  (Phase 2)
+    detect cwd + branch     branch list           + resolution state
+    session list            worktree info         from pr-monitor
          │                       │                         │
          └───────────────────────┼─────────────────────────┘
                                  ▼
@@ -248,6 +261,7 @@ Selecting a file scrolls the diff viewer to that file. The `▸` marker tracks w
                           └──────┬───────┘
                                  │
                     on submit: tmux send-keys
+                    TUI auto-closes after flash
                                  │
                                  ▼
                           ┌──────────────┐
@@ -257,36 +271,30 @@ Selecting a file scrolls the diff viewer to that file. The `▸` marker tracks w
                           └──────────────┘
 ```
 
-### Mesa.dev comment fetching
+### Mesa.dev comment fetching and resolution
 
-**Phase 1 (raw comments):**
+The review TUI fetches mesa.dev comments via `gh api repos/{owner}/{repo}/pulls/{pr}/comments` and displays them inline on the diff with severity (low/medium/high).
 
-The review TUI directly calls `gh api repos/{owner}/{repo}/pulls/{pr}/comments` to fetch mesa.dev comments. No AI analysis — just renders the raw comments inline on the diff with their severity level (low/medium/high).
+**Resolution comes from the pr-monitor agent** (see `~/.claude/agents/pr-monitor.md`), which runs as a background sub-agent every time a PR is created/updated via `gt submit`. The pr-monitor:
 
-**Phase 2 (analysis + polling):**
+1. Polls for mesa.dev reviews on the PR
+2. Reads inline comments when they arrive
+3. Fixes code locally for comments it deems necessary
+4. Reports back with a summary of what was fixed and what was skipped
 
-After `gt submit`, Claude triggers mesa.dev review (manual, not automatic) and spawns a background polling process. The TUI shows a status indicator:
+The review TUI reads this resolution data and displays each mesa comment with its state:
 
-```
-  ┌────────────────────────────────┐
-  │  ⟳ Polling mesa.dev... (2:30)  │
-  └────────────────────────────────┘
-```
+- **Resolved** (green, dimmed): pr-monitor fixed it. Shows the fix description.
+- **Skipped** (orange): pr-monitor chose not to fix. Shows reasoning. User can press `a` to queue it for Claude.
 
-When comments arrive, Claude analyzes each one:
-
-- Should it be addressed? Why/why not?
-- Classify: address / partially address / reject
-- Write proposed approach if recommending address
-
-Analysis written to `~/.cove/reviews/{pr_number}.json`:
+Resolution data written to `~/.cove/reviews/{pr_number}.json`:
 
 ```json
 {
   "pr_number": 16,
   "branch": "03-01-feat_add-auth-api",
   "repo": "rasha-hantash/pancake",
-  "analyzed_at": "2026-03-01T12:30:00Z",
+  "resolved_at": "2026-03-01T12:30:00Z",
   "comments": [
     {
       "id": "gh-comment-123",
@@ -295,15 +303,22 @@ Analysis written to `~/.cove/reviews/{pr_number}.json`:
       "line": 42,
       "severity": "high",
       "body": "No error handling for the fetch() call",
-      "recommendation": "address",
-      "reasoning": "Valid — fetch() can fail on network timeout...",
-      "proposed_fix": "Wrap in Result, propagate with ?"
+      "state": "resolved",
+      "fix_description": "Wrapped in Result with ? propagation"
+    },
+    {
+      "id": "gh-comment-456",
+      "author": "mesa[bot]",
+      "file": "src/api.rs",
+      "line": 15,
+      "severity": "low",
+      "body": "Add documentation for this function",
+      "state": "skipped",
+      "reasoning": "Name is self-explanatory, docs would be noise"
     }
   ]
 }
 ```
-
-The sub-agent **never touches code**. It only analyzes and writes recommendations. You decide what gets fixed.
 
 ---
 
@@ -358,9 +373,11 @@ If no PR has been created yet (pre-push workflow), the TUI simply doesn't fetch 
 
 ## Comment submission
 
-### Inline comments (Phase 1 — from the diff viewer)
+### How submit works
 
-Press `c` on a diff line to leave a comment (tagged as `you`). Press `S` to submit all inline comments. The TUI formats them and sends to Claude via `tmux send-keys -t :.1`:
+Press `S` to submit. The TUI collects all inline comments (`you` tags) and any queued mesa comments (`a` pressed), formats them, and sends to Claude via `tmux send-keys -t :.1`.
+
+**Inline comments only** (pre-push):
 
 ```
 Please address these review comments:
@@ -370,30 +387,68 @@ src/lib.rs:78 — Rename `x` to something descriptive
 src/api.rs:20 — This endpoint needs auth middleware
 ```
 
-### Mesa.dev feedback (Phase 2 — from the bottom-right input)
-
-Your single free-form response to the mesa.dev analysis. The TUI sends Claude the full context:
+**Inline comments + queued mesa comments** (post-push):
 
 ```
-Mesa.dev left 3 comments on PR #16. Here's my analysis and the user's feedback:
+Please address these review comments:
 
-1. src/lib.rs:42 — [high] "No error handling for fetch()"
-   My recommendation: ADDRESS — fetch() can fail on timeout
-2. src/api.rs:15 — [low] "Add documentation"
-   My recommendation: REJECT — name is self-explanatory
-3. src/lib.rs:44 — [medium] "Use anyhow::Result"
-   My recommendation: ADDRESS — aligns with project conventions
+src/lib.rs:42 — Use anyhow here instead of std Result
+src/api.rs:20 — This endpoint needs auth middleware
 
-User's feedback: "Address 1 and 3 but use anyhow. Skip 2."
+Also address these mesa.dev comments:
 
-Please address the comments according to the user's feedback.
+src/lib.rs:44 — [medium] "Use anyhow::Result" (mesa.dev)
 ```
 
-### Mechanics
+### Submit flow
 
-1. On submit, feedback is sent to Claude pane via `tmux send-keys -t :.1`
-2. For mesa.dev feedback, the input freezes to "✓ Feedback submitted"
-3. Press `q` → review closes → back to Claude → Claude is already processing
+1. Press `S` — submit confirmation flash appears ("✓ Submitting to Claude" with count of inline + mesa comments)
+2. TUI auto-closes after the flash (no need to press `q`)
+3. Comments piped to Claude via `tmux send-keys -t :.1`
+4. Claude pane reappears — Claude is already processing the feedback
+
+### Full keybind reference
+
+Press `?` to toggle this overlay in the TUI.
+
+**Navigation:**
+
+| Key     | Action                       |
+| ------- | ---------------------------- |
+| `j/k`   | Scroll diff up / down        |
+| `g/G`   | Jump to top / bottom of diff |
+| `n/N`   | Next / previous file         |
+| `↑/↓`   | Navigate sessions / branches |
+| `Enter` | Switch to selected branch    |
+
+**Comments:**
+
+| Key      | Action                         |
+| -------- | ------------------------------ |
+| `c`      | New comment on current line    |
+| `Enter`  | Newline (in comment edit mode) |
+| `Ctrl+S` | Save comment (in edit mode)    |
+| `Esc`    | Cancel comment edit            |
+| `e`      | Edit an existing comment       |
+| `d`      | Delete an existing comment     |
+
+**Actions:**
+
+| Key | Action                                    |
+| --- | ----------------------------------------- |
+| `a` | Queue / unqueue mesa comment              |
+| `A` | Queue all remaining skipped mesa comments |
+| `S` | Submit all to Claude                      |
+| `q` | Quit review (back to Claude)              |
+| `?` | Toggle keyboard reference overlay         |
+
+**Status bar behavior:**
+
+- Pre-push: shows `c comment  j/k scroll  S submit  q quit`
+- Post-push (mesa comments exist): adds `a address  A address all`
+- When comments/queued items pending: `S submit (N+M)` highlights blue with count
+- Comment mode: switches to `Ctrl+S submit · Esc cancel · Enter newline` with `COMMENT` badge
+- Files panel header shows pending count badges (`1 comment`, `1 queued`) when items exist
 
 ---
 
@@ -401,37 +456,37 @@ Please address the comments according to the user's feedback.
 
 ### Phase 1: Core review TUI
 
-The UI adapts based on context — pre-push (no PR) shows diffs + your inline comments; post-push (PR exists) also shows raw mesa.dev comments inline.
+The UI adapts based on context — pre-push (no PR) shows diffs + your inline comments; post-push (PR exists) also shows mesa.dev comments inline with resolution state.
 
-- `cove review-tui` command — ratatui app
-- Diff viewer: parse unified diff, render with +/- coloring
-- Branch/stack navigator (top-right): Graphite stacks with entries, standalone branches, worktree indicators, arrow+Enter to switch
-- File list (bottom-right): changed files with line counts, Tab/arrow to switch
+- `cove review-tui` command — ratatui app in `display-popup` overlay
+- Diff viewer (left 70%): parse unified diff, render full files with +/- coloring, scrollable
+- Lavender cursor highlight on current line
+- Sessions panel (top-right): Cove sessions with branch trees, worktree indicators, session status
+- Files panel (bottom-right): changed files with +/- line counts, replaces terminal during review
 - PR number detection: parse `PostToolUse` hook output for PR URLs, store in event JSONL
-- Mesa.dev comments (post-push only): raw fetch via `gh api` when PR number is known, rendered inline with severity (low/medium/high)
-- Inline commenting: press `c` on a line, type comment (tagged as `you`)
-- Submit (`S`): format inline comments, send via `tmux send-keys`
+- Mesa.dev comments (post-push only): fetch via `gh api`, display inline with severity + resolution state (resolved/skipped) from pr-monitor agent
+- Inline commenting: `c` on a line → multi-line input block (Enter=newline, Ctrl+S=save, Esc=cancel)
+- Comment management: `e` edit, `d` delete, `j/k` navigate between comments
+- Mesa interaction: `a` to queue skipped comment, `A` to queue all
+- Submit (`S`): flash summary → auto-close TUI → pipe to Claude via `tmux send-keys`
+- Status bar: keybind hints + position indicator (`1/3 files · line 42`)
 - Tmux binding: `bind r display-popup ...`
 
-**This gets you `C-a r` → review diffs → navigate branches/stacks → leave comments → submit to Claude → `q` back.**
+**This gets you `C-a r` → review diffs → navigate sessions/branches → leave multi-line comments → address mesa comments → submit to Claude → auto-return.**
 
-### Phase 2: Mesa.dev analysis + feedback loop
+### Phase 2: Branch switching + worktree preloading
 
-- Manual mesa.dev trigger from Claude (not automatic on push)
-- Polling indicator in TUI ("Waiting for mesa.dev...")
-- Background sub-agent analyzes mesa.dev comments (never touches code)
-- Write analysis JSON to `~/.cove/reviews/`
-- Bottom-right gains tabs: `[Files]` and `[Mesa Analysis]`
-- Mesa Analysis tab: scrollable comment cards with recommendations
-- Fixed feedback input at bottom of Mesa Analysis tab
-- Submit feedback → piped to Claude via `tmux send-keys`
-- Input freezes to "✓ Feedback submitted" after submit
+- Branch switching within the sessions panel — select a branch, diff viewer updates
+- Preload worktrees at TUI launch for fast branch switching (no git checkout latency)
+- Loading indicator if switching requires git operations
+- File ↔ diff sync: selecting a file in the files panel scrolls to that file in the diff
 
-### Phase 3: Polish
+### Phase 3: Polish + mesa analysis tab
 
-- Cove sidebar "review ready" indicator when mesa.dev analysis is available
-- Syntax highlighting in diff viewer (tree-sitter or simple keyword coloring — colors keywords like `fn`, `let`, `Result` as in an editor)
+- Mesa Analysis tab in bottom-right (`[Files] [Mesa]`) for a dedicated scrollable view of all mesa comments
+- Syntax highlighting in diff viewer (tree-sitter or simple keyword coloring)
 - Persistent review state: inline comments survive across `C-a r` toggles (saved to disk, restored on re-open)
+- Cove sidebar "review ready" indicator when mesa.dev analysis is available
 
 ---
 
@@ -439,11 +494,15 @@ The UI adapts based on context — pre-push (no PR) shows diffs + your inline co
 
 1. **TUI in Cove, not a separate app** — stays in the terminal, no context switching.
 2. **View switching via `display-popup`** — overlays the review TUI on the Claude pane without killing the process. `q` to switch back. Simple and reversible.
-3. **Sub-agent analyzes, human decides** — mesa.dev comments get AI-powered recommendations but the user approves every action. Full transparency.
-4. **Manual mesa.dev trigger** — not automatic on push. Saves money by letting you review code yourself first, then trigger the paid reviewer on cleaner code.
-5. **`tmux send-keys` for submission** — zero-infrastructure way to pipe review comments back to Claude. No custom hooks, no IPC, no file watchers.
-6. **Stack-aware diffing** — Graphite stacks diff against parent branch, not main. Standalone branches diff against detected base.
-7. **Bottom-right evolves across phases** — Phase 1: file list. Phase 2: tabbed (files + mesa analysis). Same space, progressive enhancement.
+3. **pr-monitor auto-fixes, human reviews** — the pr-monitor agent fixes mesa.dev comments automatically. The review TUI shows results (resolved/skipped). You decide what else to address. No separate "analysis" phase needed.
+4. **Two mesa states only** — resolved (green, dimmed) and skipped (orange). No "pending" state. Simple binary: either Claude fixed it or it didn't.
+5. **Multi-line inline comments** — `Enter` = newline, `Ctrl+S` = save. Not single-line. You can write detailed feedback on a specific line.
+6. **Auto-close on submit** — `S` shows a summary flash then auto-closes the TUI. No manual `q` needed after submitting. Claude is processing by the time you see the pane.
+7. **Sessions, not branches** — the top-right panel shows Cove sessions (repos) with branch trees underneath, not a standalone branch navigator. Each session is a Claude Code session at a particular repo.
+8. **Files replace terminal** — during review mode, the bottom-right pane shows files changed instead of the terminal. Terminal isn't useful during review.
+9. **`tmux send-keys` for submission** — zero-infrastructure way to pipe review comments back to Claude. No custom hooks, no IPC, no file watchers.
+10. **Stack-aware diffing** — Graphite stacks diff against parent branch, not main. Standalone branches diff against detected base.
+11. **Worktree-based branch switching** — preload worktrees for all branches at TUI launch to minimize latency when switching between branches.
 
 ---
 
@@ -451,19 +510,19 @@ The UI adapts based on context — pre-push (no PR) shows diffs + your inline co
 
 ### Cove (~/workspace/personal/cove/)
 
-| File                     | Change                                                                                                                      |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `src/cli.rs`             | Add `ReviewTui` subcommand                                                                                                  |
-| `src/main.rs`            | Wire to `review::run()`                                                                                                     |
-| `src/commands/mod.rs`    | Add `pub mod review;`                                                                                                       |
-| `src/commands/review.rs` | **New** — detect session, launch TUI                                                                                        |
-| `src/review/mod.rs`      | **New** — ratatui app, event loop                                                                                           |
-| `src/review/diff.rs`     | **New** — diff parser (unified → structured)                                                                                |
-| `src/review/ui.rs`       | **New** — ratatui widgets (diff, branch info, file list)                                                                    |
-| `src/review/comments.rs` | **New** — inline comment model, submission formatting                                                                       |
-| `src/review/mesa.rs`     | **New** — Phase 1: fetch raw comments via `gh api`, render inline. Phase 2: read analysis JSON, render in Mesa Analysis tab |
-| `src/review/branches.rs` | **New** — branch/stack detection, diff base resolution                                                                      |
-| `src/events.rs`          | **New** — extract shared helpers from `sidebar/state.rs`                                                                    |
+| File                     | Change                                                                                                                     |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `src/cli.rs`             | Add `ReviewTui` subcommand                                                                                                 |
+| `src/main.rs`            | Wire to `review::run()`                                                                                                    |
+| `src/commands/mod.rs`    | Add `pub mod review;`                                                                                                      |
+| `src/commands/review.rs` | **New** — detect session, launch TUI                                                                                       |
+| `src/review/mod.rs`      | **New** — ratatui app, event loop                                                                                          |
+| `src/review/diff.rs`     | **New** — diff parser (unified → structured)                                                                               |
+| `src/review/ui.rs`       | **New** — ratatui widgets (diff viewer with cursor, sessions panel, files panel, status bar, comment input, submit flash)  |
+| `src/review/comments.rs` | **New** — inline comment model (multi-line), comment management (create/edit/delete), submission formatting                |
+| `src/review/mesa.rs`     | **New** — fetch mesa comments via `gh api`, read resolution state from `~/.cove/reviews/`, render inline with state colors |
+| `src/review/sessions.rs` | **New** — session list with branch trees, worktree detection, session status                                               |
+| `src/events.rs`          | **New** — extract shared helpers from `sidebar/state.rs`                                                                   |
 
 ### Dotfiles (~/workspace/personal/dotfiles/)
 
@@ -473,13 +532,35 @@ The UI adapts based on context — pre-push (no PR) shows diffs + your inline co
 
 ---
 
+## Visual reference: Paper.design artboards
+
+Nine artboards were created in Paper.design during the design session (2026-03-09) to validate the visual spec. Open the Paper file to view them.
+
+### Full-screen layouts (1440x900)
+
+1. **"Review TUI — Pre-push"** — Full terminal layout: diff viewer with lavender cursor, inline `you` and `mesa` comments with resolution states, sessions panel with branch trees, files changed panel, status bar with keybinds + position indicator.
+2. **"Fresh Open — No Comments"** — Clean first-open state: pure diff with no comments, simplified status bar (no `a`/`A` keys since no mesa comments exist).
+3. **"Post-push — Queued Mesa Comments"** — All three mesa states in-context (resolved green/dimmed, skipped orange, queued blue) + user inline comment + submit count badge in files panel + `S submit (1+1)` highlighted in status bar.
+4. **"Branch Switching State"** — Loading overlay when switching branches: "switching to fix-cpu" with dot indicator, target branch highlighted with lavender border in sidebar.
+5. **"Session Switch — Pancake Selected"** — Different repo's diff, cove collapsed with "working" status, pancake expanded with its own branch tree and 5 changed files.
+
+### Detail views
+
+6. **"Comment Input State"** (960x440) — Zoomed view of the `c` interaction: inline input block with block cursor, `Ctrl+S submit · Esc cancel · Enter newline` keybinds, `COMMENT` mode badge.
+7. **"Multi-line Comment Editing"** (960x520) — 3-line comment being typed with block cursor on line 42, diff context above and below, `COMMENT` mode badge + `line 42` indicator.
+8. **"Mesa Comment States + Submit"** (960x700) — Reference sheet: resolved (green/dimmed with fix description), skipped (orange with reasoning + `'a' to address`), queued (blue with `'a' to undo`), and submit confirmation flash.
+9. **"Help Overlay — Keyboard Reference"** (640x520) — Full keybind reference organized by category (Navigation, Comments, Actions). Triggered by pressing `?`.
+
+---
+
 ## Open questions
 
 - **Diff base detection**: For non-Graphite branches, how to detect the right base? `git merge-base HEAD main`? Configurable?
-- **Large diffs**: Should we collapse unchanged regions (context folding)?
-- **Mesa.dev trigger**: What does the manual trigger look like? A Claude command? A `gh` workflow dispatch? Need to check mesa.dev's API.
-- **Multiple PRs**: If a stack has 3 PRs and mesa.dev reviewed all of them, how to navigate between reviews in the Mesa Analysis tab?
-- **Sub-agent lifetime**: Does the mesa.dev polling agent live per-PR or per-session? What happens if you push a new commit to the same PR?
+- **Large diffs**: Full file loaded (not hunks-only). Scrolling confirmed possible with ratatui + tmux + Ghostty. Context folding is a future enhancement.
+- **Multiple PRs**: If a stack has 3 PRs and mesa.dev reviewed all of them, how to handle in the inline view? Show all? Filter by current branch?
+- **pr-monitor resolution data**: How does the pr-monitor write resolution state? It currently reports back to the main session — need to define the JSON schema for `~/.cove/reviews/{pr}.json`.
+- **Worktree preloading**: How many worktrees can we preload at TUI launch without excessive disk/memory cost? Need to test with repos that have 10+ branches.
+- **File ↔ diff sync**: When selecting a file in the files panel, what animation/transition shows in the diff viewer? Instant jump or smooth scroll?
 
 ---
 

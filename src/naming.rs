@@ -34,6 +34,8 @@ pub fn sanitize_name(name: &str) -> String {
 pub fn git_branch(dir: &str) -> Option<String> {
     let output = Command::new("git")
         .args(["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .output()
         .ok()?;
 
@@ -53,10 +55,14 @@ pub fn git_branch(dir: &str) -> Option<String> {
 pub fn is_worktree(dir: &str) -> bool {
     let git_dir = Command::new("git")
         .args(["-C", dir, "rev-parse", "--git-dir"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .output()
         .ok();
     let common_dir = Command::new("git")
         .args(["-C", dir, "rev-parse", "--git-common-dir"])
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
         .output()
         .ok();
 

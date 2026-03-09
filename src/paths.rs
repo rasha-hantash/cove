@@ -59,11 +59,7 @@ pub fn migrate_legacy() {
     // Atomic rename (same filesystem)
     match fs::rename(&legacy, &xdg) {
         Ok(()) => {
-            eprintln!(
-                "cove: migrated {} → {}",
-                legacy.display(),
-                xdg.display()
-            );
+            eprintln!("cove: migrated {} → {}", legacy.display(), xdg.display());
             // Leave a symlink at the old path for anything that might reference it
             #[cfg(unix)]
             {

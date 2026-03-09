@@ -362,7 +362,13 @@ pub fn send_keys(window_name: &str, keys: &[&str]) -> Result<(), String> {
 /// Get the foreground command running in the Claude pane (.1).
 pub fn pane_command(window_name: &str) -> Result<String, String> {
     let target = format!("{SESSION}:{window_name}.1");
-    let out = tmux_stdout(&["display-message", "-t", &target, "-p", "#{pane_current_command}"])?;
+    let out = tmux_stdout(&[
+        "display-message",
+        "-t",
+        &target,
+        "-p",
+        "#{pane_current_command}",
+    ])?;
     Ok(out.trim().to_string())
 }
 
