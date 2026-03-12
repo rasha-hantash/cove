@@ -44,6 +44,13 @@ pub enum Command {
     },
     /// Install Claude Code hooks for session status detection
     Init,
+    /// Launch Claude Code in a standalone Ghostty window (voice mode works here)
+    Voice {
+        /// Session name
+        name: Option<String>,
+        /// Working directory
+        dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
