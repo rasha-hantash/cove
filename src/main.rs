@@ -14,6 +14,7 @@ fn main() {
         Some(Command::Sidebar) => sidebar::app::run(),
         Some(Command::Hook { event }) => commands::hook::run(event),
         Some(Command::Init) => commands::init::run(),
+        Some(Command::Voice { name, dir }) => commands::voice::run(name.as_deref(), dir.as_deref()),
         None => {
             // Default behavior: start a session or resume
             match cli.name {

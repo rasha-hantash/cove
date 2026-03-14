@@ -81,28 +81,38 @@ pub fn migrate_legacy() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn state_dir_respects_xdg_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { env::set_var("XDG_STATE_HOME", "/tmp/test-xdg-state") };
         let dir = state_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/test-xdg-state/cove"));
         unsafe { env::remove_var("XDG_STATE_HOME") };
+        assert_eq!(dir, PathBuf::from("/tmp/test-xdg-state/cove"));
     }
 
     #[test]
     fn events_dir_is_under_state() {
+        let _lock = ENV_LOCK.lock().unwrap();
         unsafe { env::set_var("XDG_STATE_HOME", "/tmp/test-xdg-state") };
         let dir = events_dir();
-        assert_eq!(dir, PathBuf::from("/tmp/test-xdg-state/cove/events"));
         unsafe { env::remove_var("XDG_STATE_HOME") };
+        assert_eq!(dir, PathBuf::from("/tmp/test-xdg-state/cove/events"));
     }
 
     #[test]
     fn migrate_noop_when_no_legacy() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let orig_home = env::var("HOME").ok();
         unsafe { env::set_var("HOME", "/tmp/nonexistent-home-for-cove-test") };
         unsafe { env::set_var("XDG_STATE_HOME", "/tmp/nonexistent-xdg-for-cove-test") };
         migrate_legacy();
         unsafe { env::remove_var("XDG_STATE_HOME") };
+        if let Some(h) = orig_home {
+            unsafe { env::set_var("HOME", h) };
+        }
     }
 }
