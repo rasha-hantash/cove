@@ -30,6 +30,26 @@ fn tmux_stdout(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// Check whether `dir` is inside a git repository.
+fn is_git_repo(dir: &str) -> bool {
+    Command::new("git")
+        .args(["-C", dir, "rev-parse", "--is-inside-work-tree"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Build the claude command and window name suffix based on whether the
+/// target directory is a git repo (uses --worktree) or not (plain claude).
+fn claude_cmd_and_window_name(name: &str, dir: &str) -> (String, String) {
+    if is_git_repo(dir) {
+        (format!("claude --worktree {name}"), format!("{name}(wt)"))
+    } else {
+        ("claude".to_string(), name.to_string())
+    }
+}
+
 // ── Public API ──
 
 pub const SESSION: &str = "cove";
@@ -79,8 +99,7 @@ pub fn is_inside_tmux() -> bool {
 }
 
 pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), String> {
-    let claude_cmd = format!("claude --worktree {name}");
-    let window_name = format!("{name}(wt)");
+    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir);
     let status = Command::new("tmux")
         .args([
             "new-session",
@@ -155,8 +174,7 @@ pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
     // -a = insert AFTER the target window, not AT its index.
     // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
     // and tmux tries to create at that exact index, causing "index N in use".
-    let claude_cmd = format!("claude --worktree {name}");
-    let window_name = format!("{name}(wt)");
+    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir);
     let status = Command::new("tmux")
         .args([
             "new-window",
