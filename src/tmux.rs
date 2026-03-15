@@ -79,6 +79,7 @@ pub fn is_inside_tmux() -> bool {
 }
 
 pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), String> {
+    let claude_cmd = format!("claude --worktree {name}");
     let status = Command::new("tmux")
         .args([
             "new-session",
@@ -123,7 +124,7 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), Strin
             "-t",
             ".1",
             "-k",
-            "claude",
+            &claude_cmd,
             ";",
             "set-hook",
             "-w",
@@ -143,6 +144,7 @@ pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
     // -a = insert AFTER the target window, not AT its index.
     // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
     // and tmux tries to create at that exact index, causing "index N in use".
+    let claude_cmd = format!("claude --worktree {name}");
     let status = Command::new("tmux")
         .args([
             "new-window",
@@ -153,7 +155,7 @@ pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
             name,
             "-c",
             dir,
-            "claude",
+            &claude_cmd,
         ])
         .status()
         .map_err(|e| format!("tmux: {e}"))?;
