@@ -20,8 +20,7 @@ fn main() {
             match cli.name {
                 Some(name) => {
                     let dir = cli.dir.as_deref().unwrap_or(".");
-                    let full = naming::build_window_name(&name, dir);
-                    commands::start::run(&full, &name, Some(dir))
+                    commands::start::run(&name, &name, Some(dir))
                 }
                 None => {
                     if tmux::has_session() {
