@@ -94,6 +94,16 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), Strin
             ";",
             "set-option",
             "-w",
+            "automatic-rename",
+            "off",
+            ";",
+            "set-option",
+            "-w",
+            "allow-rename",
+            "off",
+            ";",
+            "set-option",
+            "-w",
             "remain-on-exit",
             "on",
             ";",
@@ -165,6 +175,12 @@ pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
     if !status.success() {
         return Err("tmux new-window failed".to_string());
     }
+
+    // Lock the window name so Claude Code cannot overwrite it
+    let target = format!("{SESSION}:{window_name}");
+    let _ = tmux(&["set-option", "-w", "-t", &target, "automatic-rename", "off"]);
+    let _ = tmux(&["set-option", "-w", "-t", &target, "allow-rename", "off"]);
+
     Ok(())
 }
 
