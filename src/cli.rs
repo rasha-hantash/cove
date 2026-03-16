@@ -10,6 +10,9 @@ pub struct Cli {
     /// Working directory
     pub dir: Option<String>,
 
+    #[arg(long, help = "Run Claude locally instead of in a Docker container")]
+    pub local: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

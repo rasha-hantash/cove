@@ -17,10 +17,11 @@ fn main() {
         Some(Command::Voice { name, dir }) => commands::voice::run(name.as_deref(), dir.as_deref()),
         None => {
             // Default behavior: start a session or resume
+            let docker = !cli.local;
             match cli.name {
                 Some(name) => {
                     let dir = cli.dir.as_deref().unwrap_or(".");
-                    commands::start::run(&name, &name, Some(dir))
+                    commands::start::run(&name, &name, Some(dir), docker)
                 }
                 None => {
                     if tmux::has_session() {
@@ -31,7 +32,7 @@ fn main() {
                             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
                             .unwrap_or_else(|| "session".to_string());
                         let full = naming::build_window_name(&base, ".");
-                        commands::start::run(&full, &base, Some("."))
+                        commands::start::run(&full, &base, Some("."), docker)
                     }
                 }
             }

@@ -71,7 +71,7 @@ fn check_hooks() {
 
 // ── Public API ──
 
-pub fn run(name: &str, base: &str, dir: Option<&str>) -> Result<(), String> {
+pub fn run(name: &str, base: &str, dir: Option<&str>, docker: bool) -> Result<(), String> {
     let dir = dir.unwrap_or(".");
     let dir = std::fs::canonicalize(dir)
         .map_err(|e| format!("invalid directory '{dir}': {e}"))?
@@ -93,7 +93,7 @@ pub fn run(name: &str, base: &str, dir: Option<&str>) -> Result<(), String> {
             ));
         }
 
-        tmux::new_window(name, &dir)?;
+        tmux::new_window(name, &dir, docker)?;
         tmux::setup_layout(name, &dir, &sidebar_cmd)?;
 
         // Store base name so hooks can recompute the window name on branch changes
@@ -117,7 +117,7 @@ pub fn run(name: &str, base: &str, dir: Option<&str>) -> Result<(), String> {
             ));
         }
 
-        tmux::new_session(name, &dir, &sidebar_cmd)?;
+        tmux::new_session(name, &dir, &sidebar_cmd, docker)?;
 
         // Store base name so hooks can recompute the window name on branch changes
         let _ = tmux::set_window_option(name, "@cove_base", base);
