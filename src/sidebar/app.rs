@@ -74,7 +74,27 @@ fn run_loop() -> Result<(), String> {
         // Only do expensive work (state detection, context, render) when needed
         if needs_render {
             // Detect states
-            app.states = app.detector.detect(&app.windows);
+            let new_states = app.detector.detect(&app.windows);
+
+            // Detect Working → Idle transitions and play notification
+            for (idx, new_state) in &new_states {
+                if let Some(old_state) = app.states.get(idx) {
+                    if *old_state == WindowState::Working && *new_state == WindowState::Idle {
+                        // Play notification sound in background thread
+                        std::thread::spawn(|| {
+                            let home = std::env::var("HOME").unwrap_or_default();
+                            let path = format!("{home}/.claude/assets/audio/beep.mp3");
+                            let _ = std::process::Command::new("afplay")
+                                .arg(&path)
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
+                                .spawn();
+                        });
+                    }
+                }
+            }
+
+            app.states = new_states;
 
             // Context orchestration: prefetch, drain, handle selection changes
             let detector = &app.detector;
