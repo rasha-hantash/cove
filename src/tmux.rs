@@ -42,8 +42,13 @@ fn is_git_repo(dir: &str) -> bool {
 
 /// Build the claude command and window name suffix based on whether the
 /// target directory is a git repo (uses --worktree) or not (plain claude).
-fn claude_cmd_and_window_name(name: &str, dir: &str) -> (String, String) {
-    if is_git_repo(dir) {
+fn claude_cmd_and_window_name(name: &str, dir: &str, docker: bool) -> (String, String) {
+    if docker {
+        let cmd = format!(
+            "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh claude --worktree {name}"
+        );
+        (cmd, format!("{name}(docker)"))
+    } else if is_git_repo(dir) {
         (format!("claude --worktree {name}"), format!("{name}(wt)"))
     } else {
         ("claude".to_string(), name.to_string())
@@ -98,8 +103,8 @@ pub fn is_inside_tmux() -> bool {
     std::env::var("TMUX").is_ok_and(|v| !v.is_empty())
 }
 
-pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), String> {
-    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir);
+pub fn new_session(name: &str, dir: &str, sidebar_bin: &str, docker: bool) -> Result<(), String> {
+    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir, docker);
     let status = Command::new("tmux")
         .args([
             "new-session",
@@ -170,11 +175,11 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str) -> Result<(), Strin
     Ok(())
 }
 
-pub fn new_window(name: &str, dir: &str) -> Result<(), String> {
+pub fn new_window(name: &str, dir: &str, docker: bool) -> Result<(), String> {
     // -a = insert AFTER the target window, not AT its index.
     // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
     // and tmux tries to create at that exact index, causing "index N in use".
-    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir);
+    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir, docker);
     let status = Command::new("tmux")
         .args([
             "new-window",
