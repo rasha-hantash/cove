@@ -40,33 +40,27 @@ fn is_git_repo(dir: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Build the claude command and window name suffix based on whether the
-/// target directory is a git repo (uses --worktree) or not (plain claude).
+/// Build the claude command and window name.
+/// Claude Code manages its own worktrees via EnterWorktree — cove doesn't force --worktree.
 fn claude_cmd_and_window_name(name: &str, dir: &str, docker: bool) -> (String, String) {
-    let use_worktree = is_git_repo(dir);
-    let worktree_args = if use_worktree {
-        format!(" --worktree {name}")
-    } else {
-        String::new()
-    };
-
     if docker {
-        // Pass --repo so the entrypoint clones into /scratch/<name> and cd's there.
-        // Without --repo, Claude starts in /workspace (the read-only explorations root,
-        // not a git repo) and --worktree fails.
-        let repo_flag = if use_worktree {
-            format!(" --repo {name}")
+        // In docker mode, pass --repo for git repos so the entrypoint clones
+        // into /scratch/<repo> and cd's there. Non-git dirs just get plain claude.
+        let repo_flag = if is_git_repo(dir) {
+            let repo_name = std::path::Path::new(dir)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(name);
+            format!(" --repo {repo_name}")
         } else {
             String::new()
         };
         let cmd = format!(
-            "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh{repo_flag} claude{worktree_args}"
+            "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh{repo_flag} claude"
         );
         (cmd, format!("{name}(docker)"))
     } else {
-        let cmd = format!("claude{worktree_args}");
-        let suffix = if use_worktree { "(wt)" } else { "" };
-        (cmd, format!("{name}{suffix}"))
+        ("claude".to_string(), name.to_string())
     }
 }
 
