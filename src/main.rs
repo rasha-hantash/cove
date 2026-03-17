@@ -1,6 +1,6 @@
 use clap::Parser;
 use cove_cli::cli::{Cli, Command};
-use cove_cli::{commands, naming, paths, sidebar, tmux};
+use cove_cli::{commands, naming, paths, sidebar};
 
 fn main() {
     paths::migrate_legacy();
@@ -24,16 +24,15 @@ fn main() {
                     commands::start::run(&name, &name, Some(dir), docker)
                 }
                 None => {
-                    if tmux::has_session() {
-                        commands::resume::run()
-                    } else {
-                        let base = std::env::current_dir()
-                            .ok()
-                            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-                            .unwrap_or_else(|| "session".to_string());
-                        let full = naming::build_window_name(&base, ".");
-                        commands::start::run(&full, &base, Some("."), docker)
-                    }
+                    // Always derive name from current directory and start/add a window.
+                    // start::run handles both cases: creates a session if none exists,
+                    // or adds a new window to the existing session.
+                    let base = std::env::current_dir()
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                        .unwrap_or_else(|| "session".to_string());
+                    let full = naming::build_window_name(&base, ".");
+                    commands::start::run(&full, &base, Some("."), docker)
                 }
             }
         }
