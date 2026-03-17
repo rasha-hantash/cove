@@ -51,8 +51,16 @@ fn claude_cmd_and_window_name(name: &str, dir: &str, docker: bool) -> (String, S
     };
 
     if docker {
+        // Pass --repo so the entrypoint clones into /scratch/<name> and cd's there.
+        // Without --repo, Claude starts in /workspace (the read-only explorations root,
+        // not a git repo) and --worktree fails.
+        let repo_flag = if use_worktree {
+            format!(" --repo {name}")
+        } else {
+            String::new()
+        };
         let cmd = format!(
-            "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh claude{worktree_args}"
+            "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh{repo_flag} claude{worktree_args}"
         );
         (cmd, format!("{name}(docker)"))
     } else {
