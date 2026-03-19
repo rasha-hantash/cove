@@ -1,3 +1,5 @@
+> **Archived 2026-03-17** — One-time research, useful output already captured
+
 # Creative Design Toolkit — Research & Application Plan for Cove
 
 ## Context

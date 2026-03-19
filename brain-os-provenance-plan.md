@@ -1,5 +1,7 @@
 # Brain-OS Provenance — Inline Citations from Session Transcripts
 
+> **Last updated:** 2026-03-17
+
 ## What this is
 
 A system that links brain-os convention docs to the Claude Code session transcripts that produced them. Every piece of knowledge gets inline citations pointing to session transcripts — like a research paper citing its sources. This enables a `/doctor` command to trace, validate, enrich, and reorganize knowledge with full context.
