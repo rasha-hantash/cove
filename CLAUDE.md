@@ -1,3 +1,6 @@
+<!-- ox:prime-check -->
+**BLOCKING**: Run `ox agent prime` NOW before ANY other action. Do NOT respond to the user first. Enables SageOx queries.
+
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
@@ -63,3 +66,5 @@ This applies to new modules, non-trivial refactors, and any area where Rust-spec
 - **JSONL state files**: Append-only log per session. Sidebar reads only the last line (seeks to last 1KB for efficiency).
 - **No alternate screen**: The sidebar TUI renders in-place to work correctly within a tmux pane.
 - **70/30 layout enforcement**: A `window-layout-changed` hook auto-resizes pane .1 to 70% width, preventing mouse drag from breaking the layout.
+
+<!-- ox:prime --> Run SageOx `ox agent prime` on session start, after compaction, or clear. (DO NOT REMOVE)
