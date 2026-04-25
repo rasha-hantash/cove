@@ -71,7 +71,7 @@ fn check_hooks() {
 
 // ── Public API ──
 
-pub fn run(name: &str, base: &str, dir: Option<&str>, docker: bool) -> Result<(), String> {
+pub fn run(name: &str, dir: Option<&str>, docker: bool) -> Result<(), String> {
     let dir = dir.unwrap_or(".");
     let dir = std::fs::canonicalize(dir)
         .map_err(|e| format!("invalid directory '{dir}': {e}"))?
@@ -81,11 +81,11 @@ pub fn run(name: &str, base: &str, dir: Option<&str>, docker: bool) -> Result<()
     let sidebar_bin = resolve_sidebar_bin();
     let sidebar_cmd = format!("{sidebar_bin} sidebar");
 
-    // First-run: prompt to install hooks if needed
+    let is_ssh = std::env::var("SSH_CONNECTION").is_ok();
+
     check_hooks();
 
     if tmux::has_session() {
-        // Reject duplicate window names
         let names = tmux::list_window_names()?;
         if names.iter().any(|n| n == name) {
             return Err(format!(
@@ -95,21 +95,21 @@ pub fn run(name: &str, base: &str, dir: Option<&str>, docker: bool) -> Result<()
 
         tmux::new_window(name, &dir, docker)?;
         tmux::setup_layout(name, &dir, &sidebar_cmd)?;
+        if docker {
+            let _ = tmux::set_window_option(name, "@cove_docker", "1");
+        }
+        if is_ssh {
+            let _ = tmux::set_window_option(name, "@cove_ssh", "1");
+        }
 
-        // Store base name so hooks can recompute the window name on branch changes
-        let _ = tmux::set_window_option(name, "@cove_base", base);
-
-        // Purge stale event files that match this pane's recycled ID
         if let Ok(pane_id) = tmux::get_claude_pane_id(name) {
             state::purge_events_for_pane(&pane_id);
         }
 
-        // If outside tmux, attach so the user sees it
         if !tmux::is_inside_tmux() {
             tmux::attach()?;
         }
     } else {
-        // No session — create from scratch. Must run outside tmux for proper dimensions.
         if tmux::is_inside_tmux() {
             return Err(format!(
                 "No cove session exists. Run from outside tmux first:\n  \
@@ -118,12 +118,13 @@ pub fn run(name: &str, base: &str, dir: Option<&str>, docker: bool) -> Result<()
         }
 
         tmux::new_session(name, &dir, &sidebar_cmd, docker)?;
+        if docker {
+            let _ = tmux::set_window_option(name, "@cove_docker", "1");
+        }
+        if is_ssh {
+            let _ = tmux::set_window_option(name, "@cove_ssh", "1");
+        }
 
-        // Store base name so hooks can recompute the window name on branch changes
-        let _ = tmux::set_window_option(name, "@cove_base", base);
-
-        // Purge stale event files that match this pane's recycled ID.
-        // new_session creates detached (-d), so this runs before the user sees anything.
         if let Ok(pane_id) = tmux::get_claude_pane_id(name) {
             state::purge_events_for_pane(&pane_id);
         }
