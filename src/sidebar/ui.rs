@@ -44,12 +44,6 @@ pub struct SidebarWidget<'a> {
     pub states: &'a HashMap<u32, WindowState>,
     pub selected: usize,
     pub tick: u64,
-    /// Context description for the selected session (if available).
-    pub context: Option<&'a str>,
-    /// Whether context is currently being generated for the selected session.
-    pub context_loading: bool,
-    /// Error message when context generation failed (e.g. "Ollama not connected").
-    pub context_error: Option<&'a str>,
 }
 
 // ── Public API ──
@@ -87,23 +81,11 @@ impl Widget for SidebarWidget<'_> {
         let body_start = area.y + 2;
         let right_col = area.width.saturating_sub(15);
 
-        // Pre-calculate context block height so we can reserve space at the bottom
-        let context_height = if let Some(context) = self.context {
-            let max_width = (area.width as usize).saturating_sub(3);
-            let text_lines = wrap_text(context, max_width, 3).len() as u16;
-            1 + text_lines // dashed separator + text lines
-        } else if self.context_loading || self.context_error.is_some() {
-            2 // dashed separator + "loading…" or error message
-        } else {
-            0
-        };
-
         // Left column: sessions
         let body_bottom = area.y + area.height;
-        let session_bottom = body_bottom.saturating_sub(context_height);
         for (i, win) in self.windows.iter().enumerate() {
             let y = body_start + i as u16;
-            if y >= session_bottom {
+            if y >= body_bottom {
                 break;
             }
 
@@ -160,20 +142,6 @@ impl Widget for SidebarWidget<'_> {
             ]);
             buf.set_line(area.x + right_col, ly, &legend_line, area.width - right_col);
         }
-
-        // Context block pinned to the bottom of the panel
-        if context_height > 0 {
-            let context_start = body_bottom.saturating_sub(context_height);
-            if context_start >= body_start {
-                if let Some(context) = self.context {
-                    render_context_block(buf, area, context_start, right_col, context);
-                } else if self.context_loading {
-                    render_loading_block(buf, area, context_start);
-                } else if let Some(error) = self.context_error {
-                    render_error_block(buf, area, context_start, error);
-                }
-            }
-        }
     }
 }
 
@@ -214,172 +182,11 @@ fn status_span(state: WindowState, tick: u64) -> Span<'static> {
     }
 }
 
-/// Render the dashed separator + context text below the selected session.
-fn render_context_block(buf: &mut Buffer, area: Rect, mut y: u16, _right_col: u16, text: &str) {
-    // Dashed separator (full width with 1-char padding on each side)
-    if y < area.y + area.height {
-        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
-            buf.cell_mut((x, y))
-                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
-        }
-        y += 1;
-    }
-
-    // Word-wrapped context (max 3 lines)
-    let max_width = (area.width as usize).saturating_sub(3);
-    let lines = wrap_text(text, max_width, 3);
-    for line_text in &lines {
-        if y >= area.y + area.height {
-            break;
-        }
-        let line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(line_text.clone(), Style::default().fg(colors::OVERLAY)),
-        ]);
-        buf.set_line(area.x, y, &line, area.width);
-        y += 1;
-    }
-}
-
-/// Render the dashed separator + "loading…" indicator.
-fn render_loading_block(buf: &mut Buffer, area: Rect, mut y: u16) {
-    // Dashed separator (full width with 1-char padding on each side)
-    if y < area.y + area.height {
-        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
-            buf.cell_mut((x, y))
-                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
-        }
-        y += 1;
-    }
-
-    // Loading indicator
-    if y < area.y + area.height {
-        let line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                "loading\u{2026}",
-                Style::default()
-                    .fg(colors::OVERLAY)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]);
-        buf.set_line(area.x, y, &line, area.width);
-    }
-}
-
-/// Render the dashed separator + error message (dimmed).
-fn render_error_block(buf: &mut Buffer, area: Rect, mut y: u16, message: &str) {
-    // Dashed separator (full width with 1-char padding on each side)
-    if y < area.y + area.height {
-        for x in (area.x + 1)..area.x + area.width.saturating_sub(1) {
-            buf.cell_mut((x, y))
-                .map(|cell| cell.set_char('\u{2500}').set_fg(colors::SURFACE));
-        }
-        y += 1;
-    }
-
-    // Error message
-    if y < area.y + area.height {
-        let line = Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                message.to_string(),
-                Style::default()
-                    .fg(colors::SURFACE)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]);
-        buf.set_line(area.x, y, &line, area.width);
-    }
-}
-
-/// Word-wrap text to fit within `max_width`, returning at most `max_lines` lines.
-fn wrap_text(text: &str, max_width: usize, max_lines: usize) -> Vec<String> {
-    if max_width == 0 || max_lines == 0 {
-        return Vec::new();
-    }
-
-    let mut lines = Vec::new();
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        let word_width = word.chars().count();
-        if current.is_empty() {
-            if word_width > max_width {
-                let truncated: String = word.chars().take(max_width.saturating_sub(1)).collect();
-                current = format!("{truncated}\u{2026}");
-                lines.push(current);
-                current = String::new();
-                if lines.len() >= max_lines {
-                    break;
-                }
-                continue;
-            }
-            current = word.to_string();
-        } else if current.chars().count() + 1 + word_width <= max_width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            lines.push(current);
-            if lines.len() >= max_lines {
-                current = String::new();
-                break;
-            }
-            current = word.to_string();
-        }
-    }
-
-    if !current.is_empty() && lines.len() < max_lines {
-        lines.push(current);
-    }
-
-    lines
-}
-
 // ── Tests ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_wrap_short_text() {
-        let lines = wrap_text("hello world", 20, 3);
-        assert_eq!(lines, vec!["hello world"]);
-    }
-
-    #[test]
-    fn test_wrap_long_text() {
-        let lines = wrap_text("Adding OAuth login flow with Google provider", 25, 3);
-        assert_eq!(
-            lines,
-            vec!["Adding OAuth login flow", "with Google provider"]
-        );
-    }
-
-    #[test]
-    fn test_wrap_max_lines() {
-        let lines = wrap_text("one two three four five six seven eight", 10, 2);
-        assert_eq!(lines.len(), 2);
-    }
-
-    #[test]
-    fn test_wrap_empty() {
-        let lines = wrap_text("", 20, 3);
-        assert!(lines.is_empty());
-    }
-
-    #[test]
-    fn test_wrap_zero_width() {
-        let lines = wrap_text("hello", 0, 3);
-        assert!(lines.is_empty());
-    }
-
-    // ── Render output validation tests ──
-    //
-    // These tests render the SidebarWidget to a ratatui Buffer and assert
-    // that the actual output contains the expected text. This validates
-    // the full rendering pipeline — layout math, height guards, and content.
 
     use crate::tmux::WindowInfo;
 
@@ -392,7 +199,6 @@ mod tests {
         }
     }
 
-    /// Extract all text from a ratatui Buffer as a vector of strings (one per row).
     fn buf_lines(buf: &Buffer, area: Rect) -> Vec<String> {
         (area.y..area.y + area.height)
             .map(|y| {
@@ -403,7 +209,6 @@ mod tests {
             .collect()
     }
 
-    /// Check if any line in the buffer contains the given substring.
     fn buf_contains(buf: &Buffer, area: Rect, needle: &str) -> bool {
         buf_lines(buf, area)
             .iter()
@@ -411,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_no_context() {
+    fn test_render_session_name() {
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
 
@@ -423,142 +228,12 @@ mod tests {
             states: &states,
             selected: 0,
             tick: 0,
-            context: None,
-            context_loading: false,
-            context_error: None,
         };
         widget.render(area, &mut buf);
 
-        // Should show session name but no context or loading
         assert!(
             buf_contains(&buf, area, "my-session"),
             "should show session name"
-        );
-        assert!(
-            !buf_contains(&buf, area, "loading"),
-            "should not show loading"
-        );
-    }
-
-    #[test]
-    fn test_render_loading_state() {
-        let area = Rect::new(0, 0, 40, 10);
-        let mut buf = Buffer::empty(area);
-
-        let windows = vec![test_win(1, "my-session")];
-        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
-
-        let widget = SidebarWidget {
-            windows: &windows,
-            states: &states,
-            selected: 0,
-            tick: 0,
-            context: None,
-            context_loading: true,
-            context_error: None,
-        };
-        widget.render(area, &mut buf);
-
-        // Should show both session name and loading indicator
-        assert!(
-            buf_contains(&buf, area, "my-session"),
-            "should show session name"
-        );
-        assert!(
-            buf_contains(&buf, area, "loading\u{2026}"),
-            "should show loading indicator"
-        );
-    }
-
-    #[test]
-    fn test_render_context_text() {
-        let area = Rect::new(0, 0, 40, 10);
-        let mut buf = Buffer::empty(area);
-
-        let windows = vec![test_win(1, "my-session")];
-        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
-        let context_text = "Fixing auth bug in login flow";
-
-        let widget = SidebarWidget {
-            windows: &windows,
-            states: &states,
-            selected: 0,
-            tick: 0,
-            context: Some(context_text),
-            context_loading: false,
-            context_error: None,
-        };
-        widget.render(area, &mut buf);
-
-        // Should show session name and context text
-        assert!(
-            buf_contains(&buf, area, "my-session"),
-            "should show session name"
-        );
-        assert!(
-            buf_contains(&buf, area, "Fixing auth bug"),
-            "should show context text"
-        );
-        assert!(
-            !buf_contains(&buf, area, "loading"),
-            "should not show loading when context is available"
-        );
-    }
-
-    #[test]
-    fn test_render_context_not_swallowed_in_small_pane() {
-        // Minimum viable pane: header + separator + 1 session + separator + loading = 5 rows
-        let area = Rect::new(0, 0, 40, 5);
-        let mut buf = Buffer::empty(area);
-
-        let windows = vec![test_win(1, "sess")];
-        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
-
-        let widget = SidebarWidget {
-            windows: &windows,
-            states: &states,
-            selected: 0,
-            tick: 0,
-            context: None,
-            context_loading: true,
-            context_error: None,
-        };
-        widget.render(area, &mut buf);
-
-        // Loading should still render even in a small pane
-        assert!(
-            buf_contains(&buf, area, "loading\u{2026}"),
-            "loading should render in 5-row pane: {:?}",
-            buf_lines(&buf, area)
-        );
-    }
-
-    #[test]
-    fn test_render_context_swallowed_in_tiny_pane() {
-        // Pane too small: header(1) + sep(1) = body_start at row 2, height 3 → body has 1 row
-        // Context needs 2 rows (sep + loading), context_start = 3-2=1, body_start=2 → guard fails
-        let area = Rect::new(0, 0, 40, 3);
-        let mut buf = Buffer::empty(area);
-
-        let windows = vec![test_win(1, "sess")];
-        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
-
-        let widget = SidebarWidget {
-            windows: &windows,
-            states: &states,
-            selected: 0,
-            tick: 0,
-            context: None,
-            context_loading: true,
-            context_error: None,
-        };
-        widget.render(area, &mut buf);
-
-        // In a 3-row pane, context guard correctly prevents rendering
-        // (there's no space for it — this is expected behavior)
-        assert!(
-            !buf_contains(&buf, area, "loading\u{2026}"),
-            "loading should NOT render in 3-row pane (no space)"
         );
     }
 }
