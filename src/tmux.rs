@@ -9,6 +9,8 @@ pub struct WindowInfo {
     pub name: String,
     pub is_active: bool,
     pub pane_path: String,
+    pub is_docker: bool,
+    pub is_ssh: bool,
 }
 
 // ── Helpers ──
@@ -40,9 +42,9 @@ fn is_git_repo(dir: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Build the claude command and window name.
+/// Build the claude command for a session.
 /// Claude Code manages its own worktrees via EnterWorktree — cove doesn't force --worktree.
-fn claude_cmd_and_window_name(name: &str, dir: &str, docker: bool) -> (String, String) {
+fn claude_cmd(name: &str, dir: &str, docker: bool) -> String {
     if docker {
         // In docker mode, pass --repo for git repos so the entrypoint clones
         // into /scratch/<repo> and cd's there. Non-git dirs just get plain claude.
@@ -55,12 +57,11 @@ fn claude_cmd_and_window_name(name: &str, dir: &str, docker: bool) -> (String, S
         } else {
             String::new()
         };
-        let cmd = format!(
+        format!(
             "cd ~/workspace/personal/explorations/claude-container && ./scripts/run.sh{repo_flag} claude"
-        );
-        (cmd, format!("{name}(docker)"))
+        )
     } else {
-        ("claude".to_string(), name.to_string())
+        "claude".to_string()
     }
 }
 
@@ -78,25 +79,28 @@ pub fn list_windows() -> Result<Vec<WindowInfo>, String> {
         "-t",
         SESSION,
         "-F",
-        "#{window_index}|#{window_name}|#{window_active}|#{pane_current_path}",
+        "#{window_index}|#{window_name}|#{window_active}|#{@cove_docker}|#{@cove_ssh}|#{pane_current_path}",
     ])?;
     Ok(parse_window_list(&out))
 }
 
 /// Parse tmux list-windows output into WindowInfo structs.
-/// Format: "index|name|active|path" per line.
+/// Format: "index|name|active|docker|ssh|path" per line. `path` is last so any
+/// pipe characters inside it are preserved by splitn(6, '|').
 pub fn parse_window_list(output: &str) -> Vec<WindowInfo> {
     let mut windows = Vec::new();
     for line in output.lines() {
-        let parts: Vec<&str> = line.splitn(4, '|').collect();
-        if parts.len() < 4 {
+        let parts: Vec<&str> = line.splitn(6, '|').collect();
+        if parts.len() < 6 {
             continue;
         }
         windows.push(WindowInfo {
             index: parts[0].parse().unwrap_or(0),
             name: parts[1].to_string(),
             is_active: parts[2] == "1",
-            pane_path: parts[3].to_string(),
+            is_docker: !parts[3].is_empty(),
+            is_ssh: !parts[4].is_empty(),
+            pane_path: parts[5].to_string(),
         });
     }
     windows
@@ -113,7 +117,7 @@ pub fn is_inside_tmux() -> bool {
 }
 
 pub fn new_session(name: &str, dir: &str, sidebar_bin: &str, docker: bool) -> Result<(), String> {
-    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir, docker);
+    let claude_cmd = claude_cmd(name, dir, docker);
     let status = Command::new("tmux")
         .args([
             "new-session",
@@ -121,19 +125,24 @@ pub fn new_session(name: &str, dir: &str, sidebar_bin: &str, docker: bool) -> Re
             "-s",
             SESSION,
             "-n",
-            &window_name,
+            name,
             "-c",
             dir,
             ";",
             "set-option",
             "-w",
             "automatic-rename",
-            "off",
+            "on",
+            ";",
+            "set-option",
+            "-w",
+            "automatic-rename-format",
+            "#{pane_title}",
             ";",
             "set-option",
             "-w",
             "allow-rename",
-            "off",
+            "on",
             ";",
             "set-option",
             "-w",
@@ -188,7 +197,7 @@ pub fn new_window(name: &str, dir: &str, docker: bool) -> Result<(), String> {
     // -a = insert AFTER the target window, not AT its index.
     // Without -a, `-t cove` resolves to the current window (e.g. cove:1)
     // and tmux tries to create at that exact index, causing "index N in use".
-    let (claude_cmd, window_name) = claude_cmd_and_window_name(name, dir, docker);
+    let claude_cmd = claude_cmd(name, dir, docker);
     let status = Command::new("tmux")
         .args([
             "new-window",
@@ -196,7 +205,7 @@ pub fn new_window(name: &str, dir: &str, docker: bool) -> Result<(), String> {
             "-t",
             SESSION,
             "-n",
-            &window_name,
+            name,
             "-c",
             dir,
             &claude_cmd,
@@ -208,10 +217,18 @@ pub fn new_window(name: &str, dir: &str, docker: bool) -> Result<(), String> {
         return Err("tmux new-window failed".to_string());
     }
 
-    // Lock the window name so Claude Code cannot overwrite it
-    let target = format!("{SESSION}:{window_name}");
-    let _ = tmux(&["set-option", "-w", "-t", &target, "automatic-rename", "off"]);
-    let _ = tmux(&["set-option", "-w", "-t", &target, "allow-rename", "off"]);
+    // Forward Claude Code's OSC 0/2 title onto the tmux window name.
+    let target = format!("{SESSION}:{name}");
+    let _ = tmux(&["set-option", "-w", "-t", &target, "automatic-rename", "on"]);
+    let _ = tmux(&[
+        "set-option",
+        "-w",
+        "-t",
+        &target,
+        "automatic-rename-format",
+        "#{pane_title}",
+    ]);
+    let _ = tmux(&["set-option", "-w", "-t", &target, "allow-rename", "on"]);
 
     Ok(())
 }
@@ -384,21 +401,6 @@ pub fn get_claude_pane_id(window_name: &str) -> Result<String, String> {
 pub fn set_window_option(window_name: &str, key: &str, value: &str) -> Result<(), String> {
     let target = format!("{SESSION}:{window_name}");
     tmux_stdout(&["set-option", "-w", "-t", &target, key, value])?;
-    Ok(())
-}
-
-pub fn get_window_option(pane_id: &str, key: &str) -> Result<String, String> {
-    let out = tmux_stdout(&["show-option", "-w", "-t", pane_id, "-v", key])?;
-    Ok(out.trim().to_string())
-}
-
-pub fn get_window_name(pane_id: &str) -> Result<String, String> {
-    let out = tmux_stdout(&["display-message", "-t", pane_id, "-p", "#{window_name}"])?;
-    Ok(out.trim().to_string())
-}
-
-pub fn rename_window(pane_id: &str, new_name: &str) -> Result<(), String> {
-    tmux_stdout(&["rename-window", "-t", pane_id, new_name])?;
     Ok(())
 }
 

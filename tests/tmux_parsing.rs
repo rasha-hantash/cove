@@ -49,13 +49,27 @@ fn parse_window_list_base_index_1() {
 
 #[test]
 fn parse_window_list_pipe_in_path() {
-    // Path containing | shouldn't break splitn(4, '|')
-    // splitn(4, ..) means the 4th part gets everything remaining
-    let output = "0|test|1|/path/with|pipes|in|it";
+    // Path containing | shouldn't break splitn(6, '|')
+    // path is the 6th (last) field — remaining text is captured intact.
+    let output = "0|test|1|||/path/with|pipes|in|it";
 
     let windows = tmux::parse_window_list(output);
     assert_eq!(windows.len(), 1);
     assert_eq!(windows[0].pane_path, "/path/with|pipes|in|it");
+}
+
+#[test]
+fn parse_window_list_docker_ssh_flags() {
+    // 4th part = docker, 5th = ssh, 6th = path
+    let output = "0|sess|1|1||/p\n1|sess2|0||1|/p2\n2|sess3|0|||/p3";
+    let windows = tmux::parse_window_list(output);
+    assert_eq!(windows.len(), 3);
+    assert!(windows[0].is_docker);
+    assert!(!windows[0].is_ssh);
+    assert!(!windows[1].is_docker);
+    assert!(windows[1].is_ssh);
+    assert!(!windows[2].is_docker);
+    assert!(!windows[2].is_ssh);
 }
 
 #[test]

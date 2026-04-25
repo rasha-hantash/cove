@@ -80,9 +80,8 @@ impl Widget for SidebarWidget<'_> {
         // ── Body ──
         let body_start = area.y + 2;
         let right_col = area.width.saturating_sub(15);
-
-        // Left column: sessions
         let body_bottom = area.y + area.height;
+
         for (i, win) in self.windows.iter().enumerate() {
             let y = body_start + i as u16;
             if y >= body_bottom {
@@ -96,33 +95,30 @@ impl Widget for SidebarWidget<'_> {
                 .unwrap_or(WindowState::Fresh);
             let is_selected = i == self.selected;
 
-            let (bullet, name_style) = if is_selected {
-                (
-                    Span::styled("\u{276f}", Style::default().fg(Color::White)),
-                    Style::default().fg(Color::White),
-                )
+            let env_glyph = env_glyph(win);
+            let label = snake_label(&win.name);
+            let name_style = if is_selected {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             } else {
-                (Span::raw(" "), Style::default().fg(colors::OVERLAY))
+                Style::default().fg(colors::OVERLAY)
             };
 
             let mut spans = vec![
                 Span::raw(" "),
-                bullet,
+                Span::raw(env_glyph),
                 Span::raw(" "),
-                Span::styled(&win.name, name_style),
+                Span::styled(label.clone(), name_style),
             ];
 
-            let status = status_text(state);
-            if matches!(state, WindowState::Working) {
-                // Spinner renders inline right after the name
-                spans.push(status_span(state, self.tick));
-            } else if !status.is_empty() {
-                // Right-align status text against the legend column
-                let name_width = 3 + win.name.len(); // " · " or " ❯ " prefix + name
-                let status_width = status.chars().count() + 2; // 2 spaces before status
-                let pad = (right_col as usize).saturating_sub(name_width + status_width);
+            // State glyph right-aligned against the legend column.
+            if let Some(glyph) = state_span(state, self.tick) {
+                let used = 1 + env_glyph.chars().count() + 1 + label.chars().count();
+                let glyph_width = glyph_visual_width(state);
+                let pad = (right_col as usize).saturating_sub(used + glyph_width + 1);
                 spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(status_span(state, self.tick));
+                spans.push(glyph);
             }
 
             let line = Line::from(spans);
@@ -132,7 +128,7 @@ impl Widget for SidebarWidget<'_> {
         // Right column: legend (independent positioning)
         for (i, entry) in LEGEND.iter().enumerate() {
             let ly = body_start + i as u16;
-            if ly >= area.y + area.height {
+            if ly >= body_bottom {
                 break;
             }
             let legend_line = Line::from(vec![
@@ -149,36 +145,72 @@ impl Widget for SidebarWidget<'_> {
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-fn status_text(state: WindowState) -> &'static str {
-    match state {
-        WindowState::Working => "",
-        WindowState::Asking => "waiting\u{2026}",
-        WindowState::Waiting => "approve\u{2026}",
-        WindowState::Idle => "your turn",
-        WindowState::Done => "",
-        WindowState::Fresh => "",
+/// Two-cell environment glyph (docker/ssh) or a 2-cell blank for native sessions.
+fn env_glyph(win: &WindowInfo) -> &'static str {
+    if win.is_docker {
+        "\u{1F433}" // 🐳
+    } else if win.is_ssh {
+        "\u{1F310}" // 🌐
+    } else {
+        "  " // 2 cells of padding so columns align across native/docker/ssh rows
     }
 }
 
-fn status_span(state: WindowState, tick: u64) -> Span<'static> {
+/// Lowercase + non-alphanumeric → '_' + collapse repeats.
+/// Returns empty string if input is empty (no fallback label).
+pub fn snake_label(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut prev_underscore = true; // suppress leading underscores
+    for c in input.chars() {
+        let mapped = if c.is_alphanumeric() {
+            c.to_ascii_lowercase()
+        } else {
+            '_'
+        };
+        if mapped == '_' {
+            if prev_underscore {
+                continue;
+            }
+            prev_underscore = true;
+        } else {
+            prev_underscore = false;
+        }
+        out.push(mapped);
+    }
+    while out.ends_with('_') {
+        out.pop();
+    }
+    out
+}
+
+/// Renderable state glyph or None for non-actionable states (Fresh, Done).
+fn state_span(state: WindowState, tick: u64) -> Option<Span<'static>> {
     match state {
         WindowState::Working => {
             let frame = SPINNER[tick as usize % SPINNER.len()];
-            Span::styled(format!(" {frame}"), Style::default().fg(colors::LAVENDER))
+            Some(Span::styled(
+                frame.to_string(),
+                Style::default().fg(colors::LAVENDER),
+            ))
         }
-        WindowState::Idle => Span::styled(status_text(state), Style::default().fg(colors::GREEN)),
-        WindowState::Waiting => Span::styled(
-            status_text(state),
-            Style::default()
-                .fg(colors::PEACH)
-                .add_modifier(Modifier::ITALIC),
-        ),
-        _ => Span::styled(
-            status_text(state),
-            Style::default()
-                .fg(colors::OVERLAY)
-                .add_modifier(Modifier::ITALIC),
-        ),
+        WindowState::Idle => Some(Span::styled(
+            "\u{25CF}", // ●
+            Style::default().fg(colors::GREEN),
+        )),
+        WindowState::Asking | WindowState::Waiting => {
+            Some(Span::raw("\u{2753}")) // ❓
+        }
+        WindowState::Fresh | WindowState::Done => None,
+    }
+}
+
+/// Visual cell-width of the state glyph for layout math.
+fn glyph_visual_width(state: WindowState) -> usize {
+    match state {
+        WindowState::Working => 1, // braille spinner = 1 cell
+        WindowState::Idle => 1,    // ● = 1 cell
+        WindowState::Asking | WindowState::Waiting => 2, // ❓ = 2 cells
+        WindowState::Fresh | WindowState::Done => 0,
     }
 }
 
@@ -196,7 +228,32 @@ mod tests {
             name: name.to_string(),
             is_active: false,
             pane_path: format!("/project/{name}"),
+            is_docker: false,
+            is_ssh: false,
         }
+    }
+
+    #[test]
+    fn snake_label_basic() {
+        assert_eq!(
+            snake_label("Run Claude Code on VPS with Paper Desktop"),
+            "run_claude_code_on_vps_with_paper_desktop"
+        );
+    }
+
+    #[test]
+    fn snake_label_collapses_repeats_and_trims() {
+        assert_eq!(snake_label("  hello---world  "), "hello_world");
+    }
+
+    #[test]
+    fn snake_label_empty() {
+        assert_eq!(snake_label(""), "");
+    }
+
+    #[test]
+    fn snake_label_only_separators() {
+        assert_eq!(snake_label("---"), "");
     }
 
     fn buf_lines(buf: &Buffer, area: Rect) -> Vec<String> {
@@ -216,13 +273,12 @@ mod tests {
     }
 
     #[test]
-    fn test_render_session_name() {
-        let area = Rect::new(0, 0, 40, 10);
+    fn renders_snake_label() {
+        let area = Rect::new(0, 0, 60, 10);
         let mut buf = Buffer::empty(area);
 
-        let windows = vec![test_win(1, "my-session")];
+        let windows = vec![test_win(1, "Run Claude Code on VPS")];
         let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
-
         let widget = SidebarWidget {
             windows: &windows,
             states: &states,
@@ -232,8 +288,31 @@ mod tests {
         widget.render(area, &mut buf);
 
         assert!(
-            buf_contains(&buf, area, "my-session"),
-            "should show session name"
+            buf_contains(&buf, area, "run_claude_code_on_vps"),
+            "should snake-case the title"
+        );
+    }
+
+    #[test]
+    fn renders_docker_glyph() {
+        let area = Rect::new(0, 0, 60, 10);
+        let mut buf = Buffer::empty(area);
+
+        let mut win = test_win(1, "feature");
+        win.is_docker = true;
+        let windows = vec![win];
+        let states: HashMap<u32, WindowState> = [(1, WindowState::Idle)].into_iter().collect();
+        let widget = SidebarWidget {
+            windows: &windows,
+            states: &states,
+            selected: 0,
+            tick: 0,
+        };
+        widget.render(area, &mut buf);
+
+        assert!(
+            buf_contains(&buf, area, "\u{1F433}"),
+            "docker glyph should render"
         );
     }
 }

@@ -34,13 +34,14 @@ pub fn write_event_sequence(dir: &Path, session_id: &str, events: &[(&str, &str,
 }
 
 /// Build a tmux `list-windows` output string from window data.
-/// Each tuple: (index, name, is_active, pane_path)
+/// Each tuple: (index, name, is_active, pane_path) — docker/ssh fields default
+/// to empty (not set). Format mirrors `parse_window_list`.
 pub fn fake_window_output(windows: &[(u32, &str, bool, &str)]) -> String {
     windows
         .iter()
         .map(|(idx, name, active, path)| {
             format!(
-                "{}|{}|{}|{}",
+                "{}|{}|{}|||{}",
                 idx,
                 name,
                 if *active { "1" } else { "0" },
