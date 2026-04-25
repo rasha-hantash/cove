@@ -59,10 +59,14 @@ pub enum Command {
     /// `host` is resolved via `~/.ssh/config` — set up an alias there with
     /// HostName/User/IdentityFile so cove never sees the underlying details.
     /// If `host` is omitted, falls back to `$COVE_DEFAULT_VPS`.
+    ///
+    /// `dir` controls which directory cove cd's into on the remote before
+    /// starting. If omitted, falls back to `$COVE_DEFAULT_REMOTE_DIR`; if that's
+    /// also unset, cove runs from ssh's default cwd (typically $HOME).
     Vps {
         /// SSH host alias (defaults to $COVE_DEFAULT_VPS).
         host: Option<String>,
-        /// Project directory on the remote (default: ~/workspace/projects).
+        /// Directory on the remote to cd into (defaults to $COVE_DEFAULT_REMOTE_DIR; no cd if unset).
         dir: Option<String>,
     },
 }
