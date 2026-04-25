@@ -10,7 +10,6 @@ use crossterm::terminal::{self, DisableLineWrap, EnableLineWrap};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
-use crate::sidebar::context::ContextManager;
 use crate::sidebar::event::{self, Action};
 use crate::sidebar::state::{StateDetector, WindowState};
 use crate::sidebar::ui::SidebarWidget;
@@ -24,7 +23,6 @@ struct SidebarApp {
     selected: usize,
     tick: u64,
     detector: StateDetector,
-    context_mgr: ContextManager,
 }
 
 // ── Public API ──
@@ -56,7 +54,6 @@ fn run_loop() -> Result<(), String> {
         selected: 0,
         tick: 0,
         detector: StateDetector::new(),
-        context_mgr: ContextManager::new(),
     };
 
     let mut last_refresh = Instant::now();
@@ -71,7 +68,7 @@ fn run_loop() -> Result<(), String> {
             needs_render = true;
         }
 
-        // Only do expensive work (state detection, context, render) when needed
+        // Only do expensive work (state detection, render) when needed
         if needs_render {
             // Detect states
             let new_states = app.detector.detect(&app.windows);
@@ -96,30 +93,6 @@ fn run_loop() -> Result<(), String> {
 
             app.states = new_states;
 
-            // Context orchestration: prefetch, drain, handle selection changes
-            let detector = &app.detector;
-            app.context_mgr.tick(
-                &app.windows,
-                &app.states,
-                app.selected,
-                &|idx| detector.pane_id(idx).map(str::to_string),
-                &|idx| detector.cwd(idx).map(str::to_string),
-            );
-
-            // Prepare context for rendering
-            let context = app
-                .windows
-                .get(app.selected)
-                .and_then(|win| app.context_mgr.get(&win.name));
-            let context_loading = app
-                .windows
-                .get(app.selected)
-                .is_some_and(|win| app.context_mgr.is_loading(&win.name));
-            let context_error = app
-                .windows
-                .get(app.selected)
-                .and_then(|win| app.context_mgr.get_error(&win.name));
-
             // Render
             terminal
                 .draw(|frame| {
@@ -129,9 +102,6 @@ fn run_loop() -> Result<(), String> {
                         states: &app.states,
                         selected: app.selected,
                         tick: app.tick,
-                        context,
-                        context_loading,
-                        context_error,
                     };
                     frame.render_widget(widget, area);
                 })
@@ -182,7 +152,7 @@ fn run_loop() -> Result<(), String> {
             needs_render = true;
         } else {
             app.tick += 1;
-            // Trigger periodic render for context loading spinners
+            // Trigger periodic render for the Working spinner
             if app.tick % 4 == 0 {
                 needs_render = true;
             }
