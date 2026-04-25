@@ -54,6 +54,17 @@ pub enum Command {
         /// Working directory
         dir: Option<String>,
     },
+    /// SSH to a remote host and run cove there.
+    ///
+    /// `host` is resolved via `~/.ssh/config` — set up an alias there with
+    /// HostName/User/IdentityFile so cove never sees the underlying details.
+    /// If `host` is omitted, falls back to `$COVE_DEFAULT_VPS`.
+    Vps {
+        /// SSH host alias (defaults to $COVE_DEFAULT_VPS).
+        host: Option<String>,
+        /// Project directory on the remote (default: ~/workspace/projects).
+        dir: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

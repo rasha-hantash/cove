@@ -5,3 +5,4 @@ pub mod list;
 pub mod resume;
 pub mod start;
 pub mod voice;
+pub mod vps;
