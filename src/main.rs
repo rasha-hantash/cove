@@ -15,6 +15,7 @@ fn main() {
         Some(Command::Hook { event }) => commands::hook::run(event),
         Some(Command::Init) => commands::init::run(),
         Some(Command::Voice { name, dir }) => commands::voice::run(name.as_deref(), dir.as_deref()),
+        Some(Command::Vps { host, dir }) => commands::vps::run(host.as_deref(), dir.as_deref()),
         None => {
             // Default behavior: start a session or resume.
             // The window name is just a bootstrap label — Claude Code's OSC title
