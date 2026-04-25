@@ -4,17 +4,19 @@
 // Real connection details (HostName, User, IdentityFile, Port) live in
 // `~/.ssh/config` — cove only ever sees the alias name.
 //
-// If `host` is omitted, falls back to `$COVE_DEFAULT_VPS` so the common
-// case is just `cove vps`.
+// Defaults (laptop-side env vars, both optional):
+//   COVE_DEFAULT_VPS         — host alias to use when none is passed
+//   COVE_DEFAULT_REMOTE_DIR  — directory to cd into on the remote before cove
+//
+// If COVE_DEFAULT_REMOTE_DIR is unset, cove runs from ssh's default cwd
+// (typically $HOME) on the remote — no `cd` is performed. This avoids
+// baking a workspace layout into the cove binary.
 
 use std::process::Command;
 
-const DEFAULT_DIR: &str = "~/workspace/projects";
-
 pub fn run(host: Option<&str>, dir: Option<&str>) -> Result<(), String> {
     let host = resolve_host(host)?;
-    let dir = dir.unwrap_or(DEFAULT_DIR);
-    let remote_cmd = format!("cd {dir} && exec cove");
+    let remote_cmd = build_remote_cmd(resolve_dir(dir).as_deref());
 
     // -t forces tty allocation so the remote tmux/cove can render.
     let status = Command::new("ssh")
@@ -39,6 +41,25 @@ fn resolve_host(host: Option<&str>) -> Result<String, String> {
              Set up an alias in ~/.ssh/config and either pass it explicitly \
              (`cove vps myhost`) or export COVE_DEFAULT_VPS=myhost in your shell."
             .to_string()),
+    }
+}
+
+/// Resolve the remote dir: explicit arg → `$COVE_DEFAULT_REMOTE_DIR` → None.
+/// `None` means "don't cd — run cove from ssh's default cwd ($HOME)".
+fn resolve_dir(dir: Option<&str>) -> Option<String> {
+    if let Some(d) = dir {
+        return Some(d.to_string());
+    }
+    std::env::var("COVE_DEFAULT_REMOTE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+/// Compose the remote shell command. Skips the `cd` entirely when no dir is set.
+fn build_remote_cmd(dir: Option<&str>) -> String {
+    match dir {
+        Some(d) => format!("cd {d} && exec cove"),
+        None => "exec cove".to_string(),
     }
 }
 
@@ -84,5 +105,43 @@ mod tests {
         let err = resolve_host(None).unwrap_err();
         unsafe { std::env::remove_var("COVE_DEFAULT_VPS") };
         assert!(err.contains("COVE_DEFAULT_VPS"));
+    }
+
+    #[test]
+    fn dir_explicit_wins_over_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("COVE_DEFAULT_REMOTE_DIR", "/from/env") };
+        let resolved = resolve_dir(Some("/from/arg"));
+        unsafe { std::env::remove_var("COVE_DEFAULT_REMOTE_DIR") };
+        assert_eq!(resolved.as_deref(), Some("/from/arg"));
+    }
+
+    #[test]
+    fn dir_falls_back_to_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::set_var("COVE_DEFAULT_REMOTE_DIR", "~/workspace") };
+        let resolved = resolve_dir(None);
+        unsafe { std::env::remove_var("COVE_DEFAULT_REMOTE_DIR") };
+        assert_eq!(resolved.as_deref(), Some("~/workspace"));
+    }
+
+    #[test]
+    fn dir_none_when_unset() {
+        let _g = ENV_LOCK.lock().unwrap();
+        unsafe { std::env::remove_var("COVE_DEFAULT_REMOTE_DIR") };
+        assert!(resolve_dir(None).is_none());
+    }
+
+    #[test]
+    fn remote_cmd_with_dir_includes_cd() {
+        assert_eq!(
+            build_remote_cmd(Some("~/workspace")),
+            "cd ~/workspace && exec cove"
+        );
+    }
+
+    #[test]
+    fn remote_cmd_without_dir_skips_cd() {
+        assert_eq!(build_remote_cmd(None), "exec cove");
     }
 }
